@@ -3,13 +3,51 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QFile>
+#include <QSet>
 #include <QString>
+#include <algorithm>
+#include <dirent.h>
 
-// This reads the filesystem, not Nickel's library index or its exclusions.
-inline QFileInfoList browserEntries(const QDir &dir, bool showHidden) {
+// Qt on some Kobo firmware omits entries even with QDir::Hidden. Supplement
+// the Qt listing from readdir only when hidden items are requested. Never use
+// Nickel's book-index exclusion rules to filter filesystem browsing.
+inline QFileInfoList browserQtEntries(const QDir &dir, bool showHidden) {
     QDir::Filters filters = QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System;
     if (showHidden) filters |= QDir::Hidden;
     return dir.entryInfoList(filters, QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+}
+
+inline bool browserEntryLess(const QFileInfo &a, const QFileInfo &b) {
+    if (a.isDir() != b.isDir()) return a.isDir();
+    const int folded = QString::compare(a.fileName(), b.fileName(), Qt::CaseInsensitive);
+    if (folded != 0) return folded < 0;
+    return QString::compare(a.fileName(), b.fileName(), Qt::CaseSensitive) < 0;
+}
+
+inline QFileInfoList completeBrowserEntries(const QDir &dir, const QFileInfoList &qtEntries,
+                                           bool showHidden) {
+    if (!showHidden) return qtEntries;
+    DIR *raw = ::opendir(QFile::encodeName(dir.absolutePath()).constData());
+    if (!raw) return qtEntries;
+    QFileInfoList entries = qtEntries;
+    QSet<QString> names;
+    for (const QFileInfo &item : entries) names.insert(item.fileName());
+    bool added = false;
+    while (struct dirent *item = ::readdir(raw)) {
+        const QString name = QFile::decodeName(item->d_name);
+        if (name == QLatin1String(".") || name == QLatin1String("..") || names.contains(name)) continue;
+        entries.append(QFileInfo(dir.filePath(name)));
+        names.insert(name);
+        added = true;
+    }
+    ::closedir(raw);
+    if (added) std::stable_sort(entries.begin(), entries.end(), browserEntryLess);
+    return entries;
+}
+
+inline QFileInfoList browserEntries(const QDir &dir, bool showHidden) {
+    return completeBrowserEntries(dir, browserQtEntries(dir, showHidden), showHidden);
 }
 
 inline bool pathWithin(const QString &path, const QString &base) {

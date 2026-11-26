@@ -2844,14 +2844,19 @@ private:
 
         // Папки сверху, по имени без учёта регистра; список читается разом,
         // дескрипторы на /mnt/onboard не удерживаются (важно для USB-режима)
-        const QFileInfoList entries =
-            browserEntries(dir, m_showHidden);
+        const QFileInfoList qtEntries = browserQtEntries(dir, m_showHidden);
+        const QFileInfoList entries = completeBrowserEntries(dir, qtEntries, m_showHidden);
         if (m_path == m_root && !m_rootDiagLogged) {
             m_rootDiagLogged = true;
-            bool qtAdds = false, qtDisabled = false, fsAdds = false, fsDisabled = false;
-            for (const QFileInfo &fi : entries) {
+            bool qtAdds = false, qtDisabled = false, shownAdds = false, shownDisabled = false;
+            bool fsAdds = false, fsDisabled = false;
+            for (const QFileInfo &fi : qtEntries) {
                 if (fi.fileName() == u8(".adds")) qtAdds = true;
                 if (fi.fileName() == u8(".disabled")) qtDisabled = true;
+            }
+            for (const QFileInfo &fi : entries) {
+                if (fi.fileName() == u8(".adds")) shownAdds = true;
+                if (fi.fileName() == u8(".disabled")) shownDisabled = true;
             }
             int dirError = 0;
             DIR *raw = ::opendir(QFile::encodeName(m_root).constData());
@@ -2865,9 +2870,10 @@ private:
                 ::closedir(raw);
             } else dirError = errno;
             klog(u8("root listing hidden=%1 qt_adds=%2 fs_adds=%3 exists_adds=%4 "
-                    "qt_disabled=%5 fs_disabled=%6 exists_disabled=%7 dir_errno=%8")
+                    "qt_disabled=%5 fs_disabled=%6 exists_disabled=%7 dir_errno=%8 shown_adds=%9 shown_disabled=%10")
                  .arg(m_showHidden).arg(qtAdds).arg(fsAdds).arg(QFileInfo(m_root + u8("/.adds")).exists())
-                 .arg(qtDisabled).arg(fsDisabled).arg(QFileInfo(m_root + u8("/.disabled")).exists()).arg(dirError));
+                 .arg(qtDisabled).arg(fsDisabled).arg(QFileInfo(m_root + u8("/.disabled")).exists()).arg(dirError)
+                 .arg(shownAdds).arg(shownDisabled));
         }
 
         if (m_path != m_root) {

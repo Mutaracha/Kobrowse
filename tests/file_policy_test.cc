@@ -25,6 +25,7 @@ int main(int argc, char **argv) {
     const QString root = tmp.path() + "/onboard";
     require(QDir().mkpath(root + "/.kobo/Kobo"), "config folder");
     require(QDir().mkpath(root + "/.adds/app"), "hidden folder");
+    require(QDir().mkpath(root + "/.disabled"), "second hidden folder");
     require(QDir().mkpath(root + "/Books/.private"), "nested hidden folder");
     require(QDir().mkpath(root + "/Excluded"), "excluded folder");
     const QByteArray config("[FeatureSettings]\nExcludeSyncFolders=Excluded\n");
@@ -35,6 +36,21 @@ int main(int argc, char **argv) {
     require(contains(browserEntries(QDir(root), true), ".adds"), "hidden folder visible");
     require(contains(browserEntries(QDir(root), true), "Excluded"), "excluded folder visible");
     require(!contains(browserEntries(QDir(root), false), ".adds"), "hidden folder disabled");
+    // Reproduce the device log: raw readdir sees names that Qt omitted.
+    QFileInfoList filtered = browserQtEntries(QDir(root), true);
+    for (int i = filtered.size() - 1; i >= 0; --i)
+        if (filtered.at(i).fileName() == ".adds" || filtered.at(i).fileName() == ".disabled") filtered.removeAt(i);
+    const QFileInfoList recovered = completeBrowserEntries(QDir(root), filtered, true);
+    require(contains(recovered, ".adds") && contains(recovered, ".disabled"), "recover omitted folders");
+    require(!contains(completeBrowserEntries(QDir(root), filtered, false), ".adds"), "disabled means no fallback");
+    int addsCount = 0;
+    for (const QFileInfo &fi : recovered) if (fi.fileName() == ".adds") ++addsCount;
+    require(addsCount == 1, "fallback does not duplicate entries");
+    for (int i = 1; i < recovered.size(); ++i)
+        require(!browserEntryLess(recovered.at(i), recovered.at(i - 1)), "fallback keeps sorted order");
+    QFileInfoList nestedFiltered = browserQtEntries(QDir(root + "/Books"), false);
+    require(contains(completeBrowserEntries(QDir(root + "/Books"), nestedFiltered, true), ".private"),
+            "recover nested hidden folder");
     require(contains(browserEntries(QDir(root + "/Books"), true), ".private"), "nested hidden visible");
     QFile cfg(configPath);
     require(cfg.open(QIODevice::ReadOnly) && cfg.readAll() == config, "index config unmodified");
