@@ -1,5 +1,6 @@
 #include "../src/file_policy.h"
 #include "../src/file_mutations.h"
+#include "../src/pagination.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QTemporaryDir>
@@ -21,6 +22,14 @@ static bool contains(const QFileInfoList &entries, const QString &name) {
 }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    PageState p = pageState(0, 0, 100);
+    require(p.current == 1 && p.total == 1 && !p.previous && !p.next, "single page");
+    p = pageState(0, 220, 100);
+    require(p.current == 1 && p.total == 4 && !p.previous && p.next, "first page");
+    p = pageState(100, 220, 100);
+    require(p.current == 2 && p.total == 4 && p.previous && p.next, "middle page");
+    p = pageState(220, 220, 100);
+    require(p.current == 4 && p.total == 4 && p.previous && !p.next, "short last page");
     QTemporaryDir tmp;
     require(tmp.isValid(), "temporary directory");
     const QString root = tmp.path() + "/onboard";
