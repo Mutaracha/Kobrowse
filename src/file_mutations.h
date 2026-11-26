@@ -1,6 +1,8 @@
 #ifndef KOBROWSE_FILE_MUTATIONS_H
 #define KOBROWSE_FILE_MUTATIONS_H
 #include "file_policy.h"
+#include <QTemporaryDir>
+#include <cerrno>
 
 // Remove the entry itself, never the target of a symbolic link. Callers choose
 // and validate the allowed subtree; this does not protect against concurrent
@@ -35,6 +37,69 @@ inline bool cleanupAppInstall(const QString &root) {
     if ((appInfo.exists() || appInfo.isSymLink()) && !removeTreeNoFollow(root, app)) ok = false;
     if ((menuInfo.exists() || menuInfo.isSymLink()) && !removeTreeNoFollow(root, menu)) ok = false;
     return ok;
+}
+
+// Copy into an isolated sibling directory; publish the completed entry only.
+// The optional file operation allows deterministic failure injection in tests.
+typedef bool (*CopyFileOperation)(const QString &, const QString &);
+inline bool copyStagedContents(const QString &root, const QString &src, const QString &dst,
+                               QString &error, CopyFileOperation copyFile) {
+    if (!safeLocalPath(root, src)) { error = QString::fromUtf8("Источник недоступен"); return false; }
+    const QFileInfo fi(src);
+    if (fi.isDir()) {
+        if (!QDir().mkdir(dst)) { error = QString::fromUtf8("Не удалось создать временную папку"); return false; }
+        if (!QDir(src).isReadable()) { error = QString::fromUtf8("Не удалось прочитать папку"); return false; }
+        DIR *dir = ::opendir(QFile::encodeName(src).constData());
+        if (!dir) { error = QString::fromUtf8("Не удалось открыть папку"); return false; }
+        QStringList names;
+        errno = 0;
+        while (struct dirent *entry = ::readdir(dir)) {
+            const QString name = QFile::decodeName(entry->d_name);
+            if (name != QLatin1String(".") && name != QLatin1String("..")) names << name;
+        }
+        const int readError = errno;
+        ::closedir(dir);
+        if (readError) { error = QString::fromUtf8("Не удалось прочитать содержимое папки"); return false; }
+        for (const QString &name : names)
+            if (!copyStagedContents(root, src + QLatin1Char('/') + name, dst + QLatin1Char('/') + name, error, copyFile))
+                return false;
+        return true;
+    }
+    if (!fi.isFile() || !(copyFile ? copyFile(src, dst) : QFile::copy(src, dst))) {
+        error = QString::fromUtf8("Не удалось скопировать: ") + fi.fileName();
+        return false;
+    }
+    return true;
+}
+inline bool copyStagedTree(const QString &root, const QString &src, const QString &dst,
+                           QString &error, CopyFileOperation copyFile = nullptr) {
+    const QFileInfo source(src), target(dst);
+    const QString parent = target.absolutePath();
+    if (!safeCopyTree(root, src) || !safeLocalPath(root, parent) || !QFileInfo(parent).isDir()
+        || (protectedLocalPath(root, parent) && parent != root)
+        || !safeLocalPath(root, dst, true) || target.exists() || target.isSymLink()
+        || (source.isDir() && pathWithin(parent, source.absoluteFilePath()))) {
+        error = QString::fromUtf8("Источник или место назначения недоступны"); return false;
+    }
+    QTemporaryDir temporary(parent + QLatin1String("/.kobrowse-copy-XXXXXX"));
+    if (!temporary.isValid() || !safeLocalPath(root, temporary.path())) {
+        error = QString::fromUtf8("Не удалось создать временную папку"); return false;
+    }
+    const QString staged = temporary.path() + QLatin1String("/entry");
+    if (!copyStagedContents(root, src, staged, error, copyFile)) {
+        if (!temporary.remove()) error += QString::fromUtf8("; временную папку не удалось удалить: ") + temporary.path();
+        return false;
+    }
+    if (!safeLocalPath(root, dst, true) || QFileInfo(dst).exists() || QFileInfo(dst).isSymLink()
+        || !QDir().rename(staged, dst)) {
+        error = QString::fromUtf8("Не удалось сохранить копию");
+        if (!temporary.remove()) error += QString::fromUtf8("; временную папку не удалось удалить: ") + temporary.path();
+        return false;
+    }
+    if (!temporary.remove()) {
+        error = QString::fromUtf8("Копия создана, но временную папку не удалось удалить: ") + temporary.path();
+    }
+    return true;
 }
 
 // Rename one local, non-protected entry; never replace an existing destination.

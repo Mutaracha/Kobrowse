@@ -65,6 +65,7 @@
 #include "zip_writer.h"
 #include "pagination.h"
 #include "home_folder.h"
+#include "action_menu.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -248,34 +249,6 @@ static QString uniqueName(const QString &dir, const QString &name, bool isDir) {
     for (int n = 1; QFileInfo(cand).exists() || QFileInfo(cand).isSymLink(); ++n)
         cand = dir + u8("/") + base + u8(" (%1)").arg(n) + ext;
     return cand;
-}
-
-// Рекурсивное копирование. Файл пишется во временный «*.kobrowse_tmp» и переименовывается
-// в конце — при сбое не остаётся «наполовину скопированной» книги под настоящим именем.
-static bool copyRecursive(const QString &src, const QString &dst, QString &err) {
-    const QFileInfo fi(src);
-    if (fi.isSymLink()) { err = u8("Символические ссылки нельзя копировать"); return false; }
-    if (fi.isDir()) {
-        if (!QDir().mkpath(dst)) { err = u8("Не создать папку ") + QFileInfo(dst).fileName(); return false; }
-        const QFileInfoList kids = QDir(src).entryInfoList(
-            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
-        for (const QFileInfo &k : kids)
-            if (!copyRecursive(k.absoluteFilePath(), dst + u8("/") + k.fileName(), err)) return false;
-        return true;
-    }
-    const QString tmp = dst + u8(".kobrowse_tmp");
-    QFile::remove(tmp);
-    if (!QFile::copy(src, tmp)) {
-        QFile::remove(tmp);
-        err = u8("Ошибка копирования ") + fi.fileName();
-        return false;
-    }
-    if (!QFile::rename(tmp, dst)) {
-        QFile::remove(tmp);
-        err = u8("Ошибка записи ") + QFileInfo(dst).fileName();
-        return false;
-    }
-    return true;
 }
 
 // Данные строки списка
@@ -2523,7 +2496,10 @@ public:
                 QTreeWidgetItem *it = m_list->topLevelItem(i);
                 if (it->data(0, ROLE_PATH).toString() == m_lastMarked) {
                     for (int page = 0; page + 1 < int(m_pageStarts.size()); ++page)
-                        if (i >= m_pageStarts[page] && i < m_pageStarts[page + 1]) { m_pageIndex = page; applyPage(); break; }
+                        if (i >= m_pageStarts[page] && i < m_pageStarts[page + 1]) {
+                            if (m_pageIndex != page) { m_pageIndex = page; applyPage(); }
+                            break;
+                        }
                     break;
                 }
             }
@@ -2939,7 +2915,7 @@ private:
 
     // Отметка строки: флаг для MarkDelegate (он рисует инверсию)
     void setMarkedLook(QTreeWidgetItem *it, bool on) {
-        it->setData(0, ROLE_MARK, on);
+        if (it->data(0, ROLE_MARK).toBool() != on) it->setData(0, ROLE_MARK, on);
         if (on) m_lastMarked = it->data(0, ROLE_PATH).toString();
     }
 
@@ -2978,22 +2954,12 @@ private:
         if (m_marked.isEmpty()) m_menuRequested = false;
         setMarkedLook(it, on);
         updateActions();
-        ensureMarkedVisible();
+        // The tapped item is already on this page; a delayed relayout here
+        // would repaint the entire file list after the menu appears.
     }
 
     enum MenuAction { ActCopy, ActCut, ActDelete, ActZip, ActHome, ActRename, ActPaste, ActClose };
 
-    void addMenuOption(const QString &label, MenuAction action) {
-        QTreeWidgetItem *item = new QTreeWidgetItem(m_actions);
-        item->setText(0, label);
-        item->setData(0, Qt::UserRole, int(action));
-        item->setSizeHint(0, QSize(0, qMax(BTN_HEIGHT, QFontMetrics(m_actions->font()).height() + 24)));
-    }
-    void addMenuSeparator() {
-        QTreeWidgetItem *item = new QTreeWidgetItem(m_actions);
-        item->setFlags(Qt::NoItemFlags);
-        item->setSizeHint(0, QSize(0, qMax(5, GAP / 2)));
-    }
     void placeActionMenu() {
         if (!m_actions) return;
         const QFontMetrics fm(m_actions->font());
@@ -3010,26 +2976,30 @@ private:
     }
     void updateActions() {
         m_info->hide();
-        m_actions->clear();
+        const bool show = m_menuRequested && !m_settings->isVisible() && !m_confirm->isVisible();
+        if (!show) { if (m_actions->isVisible()) m_actions->hide(); return; }
+        const int row = qMax(BTN_HEIGHT, QFontMetrics(m_actions->font()).height() + 24);
+        const int separator = qMax(5, GAP / 2);
+        QList<ActionMenuEntry> entries;
         const bool selected = !m_marked.isEmpty();
         if (selected) {
             if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
-                addMenuOption(u8("Сделать домашней"), ActHome);
-            addMenuOption(u8("Вырезать"), ActCut);
-            addMenuSeparator();
-            addMenuOption(u8("Архивировать"), ActZip);
+                entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row);
+            entries << ActionMenuEntry(u8("Вырезать"), ActCut, row)
+                    << ActionMenuEntry(QString(), 0, separator, false)
+                    << ActionMenuEntry(u8("Архивировать"), ActZip, row);
         }
-        if (!m_clip.isEmpty()) addMenuOption(u8("Вставить"), ActPaste);
+        if (!m_clip.isEmpty()) entries << ActionMenuEntry(u8("Вставить"), ActPaste, row);
         if (selected) {
-            addMenuOption(u8("Копировать"), ActCopy);
-            addMenuOption(u8("Удалить"), ActDelete);
-            if (m_marked.size() == 1) addMenuOption(u8("Переименовать"), ActRename);
+            entries << ActionMenuEntry(u8("Копировать"), ActCopy, row)
+                    << ActionMenuEntry(u8("Удалить"), ActDelete, row);
+            if (m_marked.size() == 1) entries << ActionMenuEntry(u8("Переименовать"), ActRename, row);
         }
-        addMenuSeparator();
-        addMenuOption(u8("Закрыть меню"), ActClose);
-        placeActionMenu();
-        m_actions->setVisible(m_menuRequested && !m_settings->isVisible() && !m_confirm->isVisible());
-        if (m_actions->isVisible()) m_actions->raise();
+        entries << ActionMenuEntry(QString(), 0, separator, false)
+                << ActionMenuEntry(u8("Закрыть меню"), ActClose, row);
+        const bool changed = syncActionMenu(m_actions, entries);
+        if (changed || !m_actions->isVisible()) placeActionMenu();
+        if (!m_actions->isVisible()) { m_actions->show(); m_actions->raise(); }
     }
     void runMenuAction(int action) {
         m_menuRequested = false;
@@ -3053,7 +3023,6 @@ private:
         case ActClose:
             m_marked.clear(); m_selectionOrder.clear();
             for (int i = 0; i < m_list->topLevelItemCount(); ++i) setMarkedLook(m_list->topLevelItem(i), false);
-            m_list->viewport()->update();
             break;
         default: break;
         }
@@ -3123,7 +3092,7 @@ private:
                 ok = QDir().rename(src, dst);
                 if (!ok) err = u8("Не удалось переместить ") + fi.fileName();
             } else {
-                ok = copyRecursive(src, dst, err);
+                ok = copyStagedTree(m_root, src, dst, err);
             }
             if (ok) ++done; else remaining << src;
         }
@@ -3316,8 +3285,11 @@ private:
         if (m_pageStarts.size() < 2) return;
         m_pageIndex = qBound(0, m_pageIndex, int(m_pageStarts.size()) - 2);
         const int begin = m_pageStarts[m_pageIndex], end = m_pageStarts[m_pageIndex + 1];
-        for (int i = 0; i < m_list->topLevelItemCount(); ++i)
-            m_list->topLevelItem(i)->setHidden(i < begin || i >= end);
+        for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+            QTreeWidgetItem *item = m_list->topLevelItem(i);
+            const bool hidden = i < begin || i >= end;
+            if (item->isHidden() != hidden) item->setHidden(hidden);
+        }
         m_list->doItemsLayout(); m_list->scrollToTop();
         updatePageInfo();
     }
@@ -3330,7 +3302,6 @@ private:
         if (!m_pageLabel || !m_countLabel || !m_prev || !m_next) return;
         const int total = qMax(1, int(m_pageStarts.size()) - 1);
         m_prev->setEnabled(m_pageIndex > 0); m_next->setEnabled(m_pageIndex + 1 < total);
-        m_prev->update(); m_next->update();
         m_pageLabel->setText(u8("%1 / %2").arg(m_pageIndex + 1).arg(total));
         m_countLabel->setText(u8("файлов: %1  папок: %2").arg(m_fileCount).arg(m_dirCount));
     }

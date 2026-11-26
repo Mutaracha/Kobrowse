@@ -17,6 +17,11 @@ static void writeFile(const QString &path, const QByteArray &data) {
     require(f.open(QIODevice::WriteOnly), "create fixture");
     require(f.write(data) == data.size(), "write fixture");
 }
+static int copiesBeforeFailure = 0;
+static bool copyWithFailure(const QString &src, const QString &dst) {
+    if (copiesBeforeFailure-- <= 0) return false;
+    return QFile::copy(src, dst);
+}
 static bool contains(const QFileInfoList &entries, const QString &name) {
     for (const QFileInfo &item : entries) if (item.fileName() == name) return true;
     return false;
@@ -113,6 +118,26 @@ int main(int argc, char **argv) {
     require(QFileInfo(root + "/Books/new name").exists(), "renamed file exists");
     require(renameLocalEntry(root, root + "/Excluded", "Renamed folder", renameError), "rename folder");
     require(QFileInfo(root + "/Renamed folder").isDir(), "renamed folder exists");
+    const QString sourceDir = root + "/Copy source";
+    const QString destDir = root + "/Copy destination";
+    require(QDir().mkpath(sourceDir + "/sub") && QDir().mkpath(destDir), "copy fixtures");
+    writeFile(sourceDir + "/first", "first");
+    writeFile(sourceDir + "/sub/.hidden", "hidden");
+    writeFile(destDir + "/result.kobrowse_tmp", "user data");
+    QString copyError;
+    copiesBeforeFailure = 1;
+    require(!copyStagedTree(root, sourceDir, destDir + "/result", copyError, copyWithFailure), "failed copy reported");
+    require(!QFileInfo(destDir + "/result").exists(), "failure leaves no partial destination");
+    require(QFileInfo(destDir + "/result.kobrowse_tmp").exists(), "user temporary-name file preserved");
+    require(QDir(destDir).entryList(QStringList() << ".kobrowse-copy-*", QDir::Dirs | QDir::Hidden).isEmpty(), "failed stage cleaned");
+    require(copyStagedTree(root, sourceDir, destDir + "/result", copyError), "copy folder");
+    require(QFileInfo(destDir + "/result/sub/.hidden").exists(), "nested hidden copied");
+    require(!copyStagedTree(root, sourceDir, destDir + "/result", copyError), "copy collision rejected");
+    require(QFileInfo(destDir + "/result/first").exists(), "collision preserves destination");
+    require(!copyStagedTree(root, sourceDir, sourceDir + "/sub/copy", copyError), "copy into self rejected");
+    require(!copyStagedTree(root, root + "/Books", destDir + "/unsafe", copyError), "nested symlink copy rejected");
+    require(!copyStagedTree(root, sourceDir, root + "/.kobo/copied", copyError), "copy into protected folder rejected");
+    require(QDir(destDir).entryList(QStringList() << ".kobrowse-copy-*", QDir::Dirs | QDir::Hidden).isEmpty(), "successful stage cleaned");
     const QString trash = root + "/.kobrowse_trash";
     require(QDir().mkpath(trash + "/nested"), "trash folder");
     writeFile(trash + "/nested/book", "trash");
