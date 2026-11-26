@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
           submodules: true
@@ -21,7 +21,7 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify Qt 5 test package
         run: bash scripts/build-kobo.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: kofm-kobo-qt5-test
           path: kofm_KoboRoot.tgz
