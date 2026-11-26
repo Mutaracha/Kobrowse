@@ -56,6 +56,7 @@
 #include <unistd.h> // sync()
 #include <dlfcn.h>  // dlsym — функции Nickel
 #include <cstring>
+#include <functional>
 
 #include <NickelHook.h>
 
@@ -311,11 +312,13 @@ static qreal layoutText(const QString &text, const QFont &f, qreal width,
 class RowDelegate : public QStyledItemDelegate {
 public:
     RowDelegate(QWidget *view, const QFont &f) : QStyledItemDelegate(view), m_view(view), m_font(f) {}
+    void setMaxRowHeight(int height) { m_maxHeight = height; }
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &idx) const override {
         const qreal h = layoutText(idx.data().toString(), fontFor(idx), textWidth());
         const QString detail = idx.data(ROLE_DETAIL).toString();
         const qreal d = detail.isEmpty() ? 0 : layoutText(detail, detailFont(), textWidth());
-        return QSize(m_view->width(), qMax(iconSize(), int(h + d)) + 2 * PAD_V + 1);
+        const int wanted = qMax(iconSize(), int(h + d)) + 2 * PAD_V + 1;
+        return QSize(m_view->width(), m_maxHeight > 0 ? qMin(wanted, m_maxHeight) : wanted);
     }
     void paint(QPainter *p, const QStyleOptionViewItem &opt, const QModelIndex &idx) const override {
         const bool mark = idx.data(ROLE_MARK).toBool();
@@ -342,7 +345,14 @@ public:
         }
         p->setPen(ink);
         const QPointF pos(opt.rect.left() + PAD_H * 2 + sz, opt.rect.top() + PAD_V);
-        const qreal h = layoutText(idx.data().toString(), fontFor(idx), textWidth(), p, pos);
+        QString name = idx.data().toString();
+        const qreal fullHeight = layoutText(name, fontFor(idx), textWidth());
+        const qreal detailHeight = idx.data(ROLE_DETAIL).toString().isEmpty() ? 0
+            : layoutText(idx.data(ROLE_DETAIL).toString(), detailFont(), textWidth());
+        if (m_maxHeight > 0 && fullHeight + detailHeight + 2 * PAD_V + 1 > m_maxHeight)
+            name = QFontMetrics(fontFor(idx)).elidedText(name, Qt::ElideMiddle, int(textWidth()));
+        p->setClipRect(opt.rect);
+        const qreal h = layoutText(name, fontFor(idx), textWidth(), p, pos);
         const QString detail = idx.data(ROLE_DETAIL).toString();
         if (!detail.isEmpty())
             layoutText(detail, detailFont(), textWidth(), p, QPointF(pos.x(), pos.y() + h));
@@ -364,6 +374,7 @@ private:
     qreal textWidth() const { return qMax(40, m_view->width() - iconSize() - 3 * PAD_H); }
     QWidget *m_view;
     QFont m_font;
+    int m_maxHeight = 0;
 };
 
 // Рубленый шрифт Kobo для кнопок: Kobo Nickel (шрифт интерфейса), затем Avenir, иначе любой sans
@@ -546,8 +557,8 @@ private:
 // Компактные элементы навигации по образцу верхней панели Kobalt.
 class ChromeButton : public QPushButton {
 public:
-    ChromeButton(Icon icon, const QString &text, QWidget *parent)
-        : QPushButton(parent), m_icon(icon), m_text(text) {
+    ChromeButton(Icon icon, const QString &text, QWidget *parent, bool framed = false)
+        : QPushButton(parent), m_icon(icon), m_text(text), m_framed(framed) {
         setFocusPolicy(Qt::NoFocus);
         setAccessibleName(text);
     }
@@ -555,10 +566,14 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         const QColor ink = isEnabled() ? QColor(Qt::black) : QColor(165, 165, 165);
+        if (m_framed) {
+            p.setRenderHint(QPainter::Antialiasing, true); p.setPen(QPen(ink, qMax(1.0, BTN_PEN)));
+            p.setBrush(Qt::white); p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), BTN_RADIUS, BTN_RADIUS);
+        }
         const int iconSize = (m_icon == I_CHEV_UP || m_icon == I_CHEV_DOWN) ? qRound(ICON_PX * 1.6) : ICON_PX;
         const int size = qMin(iconSize, qMin(height() - 8, width() - 8));
         if (size <= 0) return;
-        const int left = m_text.isEmpty() ? (width() - size) / 2 : 4;
+        const int left = m_text.isEmpty() ? (width() - size) / 2 : (m_framed ? 12 : 4);
         drawIcon(&p, m_icon, QRectF(left, (height() - size) / 2, size, size), ink);
         if (!m_text.isEmpty()) {
             p.setPen(ink); p.setFont(font());
@@ -569,6 +584,7 @@ protected:
 private:
     Icon m_icon;
     QString m_text;
+    bool m_framed;
 };
 
 // Рисованный переключатель: одинаково виден на Qt 5 и e-ink.
@@ -604,6 +620,17 @@ protected:
 //       — тот же путь, что и тап в библиотеке Nickel → проходит через Kobalt
 // this — «пустой» ReadingViewMixin: только указатель на его vtable (_ZTV16ReadingViewMixin + 8).
 template <typename T> static T nsym(const char *n) { return reinterpret_cast<T>(dlsym(RTLD_DEFAULT, n)); }
+
+// Pause the idle timeout during sleep; USB is handled separately.
+static void bindSleepTimer(QTimer *timer) {
+    typedef QObject *(*Manager)();
+    Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
+    QObject *manager = power ? power() : nullptr;
+    if (!manager) return;
+    QObject::connect(manager, SIGNAL(aboutToSleep()), timer, SLOT(stop()));
+    QObject::connect(manager, SIGNAL(resumingFromSleep()), timer, SLOT(start()));
+    QObject::connect(manager, SIGNAL(resumedFromSleep()), timer, SLOT(start()));
+}
 
 // Можно ли открывать книги на этой прошивке. Вызовы libnickel проверены только на 4.38: на другой версии
 // функции с теми же именами могут вести себя иначе, поэтому по умолчанию (auto) там открытие выключено.
@@ -927,10 +954,7 @@ public:
         m_idle.setInterval(IDLE_MS);
         connect(&m_idle, &QTimer::timeout, this, [this]() { klog(u8("opds idle close")); close(); });
         m_idle.start();
-        QGuiApplication *ga = static_cast<QGuiApplication *>(QCoreApplication::instance());
-        connect(ga, &QGuiApplication::focusWindowChanged, this, [this](QWindow *w) {
-            if (w && window() && w != window()->windowHandle()) close();
-        });
+        bindSleepTimer(&m_idle);
 
         qApp->installEventFilter(this);
         m_url = opdsReadUrl();
@@ -1846,11 +1870,12 @@ public:
         m_idle.setSingleShot(true); m_idle.setInterval(IDLE_MS);
         connect(&m_idle, &QTimer::timeout, this, [this]() { close(); });
         m_idle.start();
-        connect(static_cast<QGuiApplication *>(QCoreApplication::instance()),
-                &QGuiApplication::focusWindowChanged, this, [this](QWindow *w) {
-                    if (w && window() && w != window()->windowHandle()) close();
-                });
+        bindSleepTimer(&m_idle);
         qApp->installEventFilter(this);
+    }
+    void startRename(const QString &name, const std::function<QString(const QString &)> &submit) {
+        m_rename = submit; m_title->setText(u8("Переименовать: нажмите Enter"));
+        m_field->setText(name); setCursorPos(name.size());
     }
     ~SearchWindow() { qApp->removeEventFilter(this); if (g_search == this) g_search = nullptr; }
 
@@ -1962,7 +1987,12 @@ private:
         if (role == "Alt") { m_alt = (m_alt + 1) % 3; updateKeys(); return; }
         if (role == "Cmb") { m_combine = !m_combine; m_combineBuf.clear(); updateKeys(); return; }
         if (role == "Spc") { insertChar(QLatin1Char(' ')); return; }
-        if (role == "Ret") { releaseCombine(); doSearch(); return; }
+        if (role == "Ret") {
+            releaseCombine();
+            if (m_rename) { const QString error = m_rename(m_field->text()); if (error.isEmpty()) close(); else showMsg(error); }
+            else doSearch();
+            return;
+        }
         if (role == "DB") { backspace(); return; }
         if (role == "DF") { deleteForward(); return; }
         if (role == "MB") { moveCursor(-1); return; }
@@ -2238,6 +2268,7 @@ private:
     QVector<QPushButton *> m_btns;
     QFont m_fKey, m_fFunc;
     QStringList m_paths;
+    std::function<QString(const QString &)> m_rename;
     int m_layout, m_cur = 0;
     int m_shift, m_alt;
     bool m_combine;
@@ -2265,6 +2296,16 @@ static void ksearch_open() {
     g_search->setGeometry(host->rect());
     g_search->show(); g_search->raise();
     klog(u8("ksearch window shown"));
+}
+
+static void krename_open(const QString &name, const std::function<QString(const QString &)> &submit) {
+    if (g_search) return;
+    QWidget *host = koboHostWindow();
+    if (!host) return;
+    g_search = new SearchWindow(host);
+    g_search->startRename(name, submit);
+    g_search->setGeometry(host->rect());
+    g_search->show(); g_search->raise();
 }
 
 
@@ -2369,20 +2410,28 @@ public:
         m_toolbar = new QWidget(this);
         QHBoxLayout *toolbar = new QHBoxLayout(m_toolbar);
         toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(GAP);
-        ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar);
-        QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(12 * SCREEN_DPI / 72.0)));
+        ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar, true);
+        QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(8 * SCREEN_DPI / 72.0)));
         back->setFont(backFont); back->setMinimumHeight(qMax(48, BTN_HEIGHT / 2));
-        toolbar->addWidget(back, 1);
+        back->setFixedWidth(QFontMetrics(backFont).width(u8("Закрыть Kobrowse")) + ICON_PX + 36);
+        toolbar->addWidget(back); toolbar->addStretch(1);
         ChromeButton *find = new ChromeButton(I_SEARCH, QString(), m_toolbar);
         ChromeButton *settings = new ChromeButton(I_MORE, QString(), m_toolbar);
         find->setAccessibleName(u8("Поиск")); settings->setAccessibleName(u8("Настройки"));
         const int chromeHeight = qMax(48, BTN_HEIGHT / 2);
         find->setFixedSize(chromeHeight, chromeHeight); settings->setFixedSize(chromeHeight, chromeHeight);
+        if (TRASH_ENABLED) {
+            ChromeButton *trash = new ChromeButton(I_TRASH, QString(), m_toolbar);
+            trash->setAccessibleName(u8("Открыть корзину")); trash->setFixedSize(chromeHeight, chromeHeight);
+            toolbar->addWidget(trash);
+            connect(trash, &QPushButton::clicked, [this]() { openTrash(); });
+        }
         toolbar->addWidget(find); toolbar->addWidget(settings);
         connect(back, &QPushButton::clicked, [this]() { close(); });
         connect(find, &QPushButton::clicked, [this]() { ksearch_open(); });
         connect(settings, &QPushButton::clicked, [this]() { showSettings(true); });
         lay->addWidget(m_toolbar);
+        m_headerLine = new QFrame(this); m_headerLine->setFrameShape(QFrame::HLine); lay->addWidget(m_headerLine);
 
         // Текущий путь остаётся видимым при прокрутке списка.
         m_pathLabel = new QLabel(this);
@@ -2391,6 +2440,7 @@ public:
         m_pathLabel->setWordWrap(true);
         m_pathLabel->setTextFormat(Qt::PlainText);
         lay->addWidget(m_pathLabel);
+        m_pathLine = new QFrame(this); m_pathLine->setFrameShape(QFrame::HLine); lay->addWidget(m_pathLine);
 
         // Список файлов и папок
         m_list = new QTreeWidget(this);
@@ -2400,7 +2450,8 @@ public:
         m_list->setRootIsDecorated(false);
         m_list->setIndentation(0);
         m_list->setUniformRowHeights(false);   // высота строки по содержимому
-        m_list->setItemDelegate(new RowDelegate(m_list, fList)); // строки рисует RowDelegate
+        m_fileDelegate = new RowDelegate(m_list, fList);
+        m_list->setItemDelegate(m_fileDelegate);
         m_list->setSelectionMode(QAbstractItemView::NoSelection);
         m_list->setFocusPolicy(Qt::NoFocus);
         // Полосы прокрутки скрыты: на e-ink листаем страницами кнопками
@@ -2471,7 +2522,8 @@ public:
             for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
                 QTreeWidgetItem *it = m_list->topLevelItem(i);
                 if (it->data(0, ROLE_PATH).toString() == m_lastMarked) {
-                    m_list->scrollToItem(it, QAbstractItemView::EnsureVisible);
+                    for (int page = 0; page + 1 < int(m_pageStarts.size()); ++page)
+                        if (i >= m_pageStarts[page] && i < m_pageStarts[page + 1]) { m_pageIndex = page; applyPage(); break; }
                     break;
                 }
             }
@@ -2493,7 +2545,7 @@ public:
                                    "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"));
         m_actions->hide();
         connect(m_actions, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int) {
-            if (it) runMenuAction(it->data(0, Qt::UserRole).toInt());
+            if (it && (it->flags() & Qt::ItemIsEnabled)) runMenuAction(it->data(0, Qt::UserRole).toInt());
         });
 
         // Подтверждение необратимых операций — внутри окна, без системного диалога.
@@ -2536,6 +2588,7 @@ public:
         });
 
         // Нижняя строка: постраничная навигация и счётчик всей папки.
+        m_footerLine = new QFrame(this); m_footerLine->setFrameShape(QFrame::HLine); lay->addWidget(m_footerLine);
         m_nav = new QWidget(this);
         QHBoxLayout *footer = new QHBoxLayout(m_nav);
         footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(GAP);
@@ -2543,22 +2596,22 @@ public:
         m_next = new ChromeButton(I_CHEV_DOWN, QString(), m_nav);
         m_prev->setAccessibleName(u8("Предыдущая страница"));
         m_next->setAccessibleName(u8("Следующая страница"));
-        m_prev->setFixedSize(chromeHeight, chromeHeight); m_next->setFixedSize(chromeHeight, chromeHeight);
+        const int footerHeight = qMax(40, chromeHeight * 3 / 4);
+        m_prev->setFixedSize(footerHeight, footerHeight); m_next->setFixedSize(footerHeight, footerHeight);
         footer->addWidget(m_prev); footer->addWidget(m_next);
         m_pageLabel = new QLabel(m_nav); m_pageLabel->setFont(fMsg);
         footer->addWidget(m_pageLabel);
         footer->addStretch(1);
-        m_countLabel = new QLabel(m_nav); m_countLabel->setFont(fMsg);
-        m_countLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_countLabel = new QPushButton(m_nav); m_countLabel->setFont(fMsg);
+        m_countLabel->setFocusPolicy(Qt::NoFocus);
+        m_countLabel->setAccessibleName(u8("Сведения"));
+        connect(m_countLabel, &QPushButton::clicked, [this]() { showInfo(); });
         footer->addWidget(m_countLabel);
         lay->addWidget(m_nav);
-        QScrollBar *bar = m_list->verticalScrollBar();
-        connect(m_prev, &QPushButton::clicked, [bar]() { bar->triggerAction(QAbstractSlider::SliderPageStepSub); });
-        connect(m_next, &QPushButton::clicked, [bar]() { bar->triggerAction(QAbstractSlider::SliderPageStepAdd); });
-        connect(bar, &QScrollBar::valueChanged, this, [this](int) { updatePageInfo(); });
+        connect(m_prev, &QPushButton::clicked, [this]() { turnPage(-1); });
+        connect(m_next, &QPushButton::clicked, [this]() { turnPage(1); });
         m_pageTimer.setSingleShot(true);
-        connect(&m_pageTimer, &QTimer::timeout, this, [this]() { updatePageInfo(); });
-        connect(bar, &QScrollBar::rangeChanged, this, [this](int, int) { m_pageTimer.start(0); });
+        connect(&m_pageTimer, &QTimer::timeout, this, [this]() { recalculatePages(); });
 
         // Страховка 1: закрыть после IDLE_MS без касаний
         m_idle.setSingleShot(true);
@@ -2566,14 +2619,7 @@ public:
         connect(&m_idle, &QTimer::timeout, this, [this]() { klog(u8("idle close")); close(); });
         m_idle.start();
 
-        // Страховка 2: закрыться, если Nickel показал другое окно (диалог USB и т.п.)
-        QGuiApplication *ga = static_cast<QGuiApplication *>(QCoreApplication::instance());
-        connect(ga, &QGuiApplication::focusWindowChanged, this, [this](QWindow *w) {
-            if (w && window() && w != window()->windowHandle()) {
-                klog(u8("focus changed -> close"));
-                close();
-            }
-        });
+        bindSleepTimer(&m_idle);
 
         load();
 
@@ -2601,6 +2647,7 @@ protected:
     // (скрытие ряда кнопок, перестройка списка), касание внутри окна попадёт сюда.
     bool eventFilter(QObject *obj, QEvent *e) override {
         const QEvent::Type t = e->type();
+        if (m_list && obj == m_list->viewport() && t == QEvent::Resize) m_pageTimer.start(0);
         if (!(t == QEvent::TouchBegin || t == QEvent::TouchUpdate || t == QEvent::TouchEnd
               || t == QEvent::TouchCancel) || obj == this || !obj->isWidgetType())
             return false;
@@ -2645,6 +2692,7 @@ protected:
                 m_twoFinger = true;
                 m_twoStartY = (mapFromGlobal(pts.at(0).screenPos().toPoint()).y()
                                + mapFromGlobal(pts.at(1).screenPos().toPoint()).y()) / 2.0;
+                m_twoCurrentY = m_twoStartY;
                 m_scrollStart = m_list->verticalScrollBar()->value();
             }
             if (pts.size() == 1 && !m_menuTouch && !m_confirm->isVisible() && inList(p)) {
@@ -2678,10 +2726,10 @@ protected:
                                  + mapFromGlobal(pts.at(1).screenPos().toPoint()).y()) / 2.0;
                 if (!m_twoFinger) {
                     m_twoFinger = true;
-                    m_twoStartY = y;
+                    m_twoStartY = y; m_twoCurrentY = y;
                     m_scrollStart = m_list->verticalScrollBar()->value();
                 } else if (inList(m_pressPos)) {
-                    m_list->verticalScrollBar()->setValue(m_scrollStart - int(y - m_twoStartY));
+                    m_twoCurrentY = y;
                 }
             } else if (!pts.isEmpty() && (p - m_pressPos).manhattanLength() > SWIPE_PX) {
                 m_moved = true;   // один палец сдвинулся — это не нажатие
@@ -2690,12 +2738,14 @@ protected:
             break;
         case QEvent::TouchEnd: {
             m_holdTimer.stop(); m_holdPath.clear();
-            if (m_twoFinger && m_tapLog > 0) { --m_tapLog; klog(u8("two-finger scroll")); }
+            if (m_twoFinger && m_swipeList) {
+                const int direction = pageSwipeDirection(0, int(m_twoCurrentY - m_twoStartY), SWIPE_PX);
+                if (direction) turnPage(direction);
+            }
             if (!pts.isEmpty() && !m_twoFinger && m_moved && !m_holdFired && m_swipeList) {
                 const QPoint delta = p - m_pressPos;
                 const int direction = pageSwipeDirection(delta.x(), delta.y(), SWIPE_PX);
-                if (direction) m_list->verticalScrollBar()->triggerAction(direction > 0
-                        ? QAbstractSlider::SliderPageStepAdd : QAbstractSlider::SliderPageStepSub);
+                if (direction) turnPage(direction);
             } else if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired) tapAt(p, false);
             m_twoFinger = false;
             break;
@@ -2739,7 +2789,7 @@ private:
             const QPoint menuPoint = m_actions->viewport()->mapFrom(this, p);
             if (m_actions->viewport()->rect().contains(menuPoint)) {
                 QTreeWidgetItem *item = m_actions->itemAt(menuPoint);
-                if (item) runMenuAction(item->data(0, Qt::UserRole).toInt());
+                if (item && (item->flags() & Qt::ItemIsEnabled)) runMenuAction(item->data(0, Qt::UserRole).toInt());
                 return;
             }
         }
@@ -2895,8 +2945,12 @@ private:
 
     // Сведения об одном отмеченном файле/папке
     void showInfo() {
-        if (m_marked.size() != 1) return;
-        const QFileInfo fi(*m_marked.begin());
+        if (m_info->isVisible()) { m_info->hide(); return; }
+        if (m_marked.size() > 1) {
+            m_info->setText(u8("Выбрано элементов: %1").arg(m_marked.size()));
+            m_info->show(); return;
+        }
+        const QFileInfo fi(m_marked.isEmpty() ? m_path : *m_marked.begin());
         QString t = fi.fileName() + u8("\n\n");
         if (fi.isSymLink()) {
             t += u8("Символическая ссылка: ") + fi.symLinkTarget() + u8("\n");
@@ -2921,13 +2975,13 @@ private:
         const bool on = !m_marked.contains(path);
         if (on) { m_marked.insert(path); m_selectionOrder << path; }
         else { m_marked.remove(path); m_selectionOrder.removeAll(path); }
+        if (m_marked.isEmpty()) m_menuRequested = false;
         setMarkedLook(it, on);
         updateActions();
         ensureMarkedVisible();
     }
 
-    enum MenuAction { ActCopy, ActCut, ActDelete, ActInfo, ActZip, ActHome, ActClear,
-                      ActPaste, ActDrop, ActClose };
+    enum MenuAction { ActCopy, ActCut, ActDelete, ActZip, ActHome, ActRename, ActPaste, ActClose };
 
     void addMenuOption(const QString &label, MenuAction action) {
         QTreeWidgetItem *item = new QTreeWidgetItem(m_actions);
@@ -2935,43 +2989,48 @@ private:
         item->setData(0, Qt::UserRole, int(action));
         item->setSizeHint(0, QSize(0, qMax(BTN_HEIGHT, QFontMetrics(m_actions->font()).height() + 24)));
     }
-
+    void addMenuSeparator() {
+        QTreeWidgetItem *item = new QTreeWidgetItem(m_actions);
+        item->setFlags(Qt::NoItemFlags);
+        item->setSizeHint(0, QSize(0, qMax(5, GAP / 2)));
+    }
     void placeActionMenu() {
         if (!m_actions) return;
-        const int w = qMax(1, width() / 2 - GAP);
-        const int row = qMax(BTN_HEIGHT, QFontMetrics(m_actions->font()).height() + 24);
-        const int h = qMin(height() - 2 * GAP, row * m_actions->topLevelItemCount() + 6);
+        const QFontMetrics fm(m_actions->font());
+        int widthNeeded = 0, heightNeeded = 6;
+        for (int i = 0; i < m_actions->topLevelItemCount(); ++i) {
+            QTreeWidgetItem *item = m_actions->topLevelItem(i);
+            widthNeeded = qMax(widthNeeded, fm.width(item->text(0)));
+            heightNeeded += item->sizeHint(0).height();
+        }
+        const int w = qBound(1, widthNeeded + qMax(48, GAP * 2), qMax(1, width() - 2 * GAP));
+        const int h = qMin(height() - 2 * GAP, heightNeeded);
         m_actions->setGeometry(width() - GAP - w, GAP, w, qMax(1, h));
         if (m_actions->isVisible()) m_actions->raise();
     }
-
     void updateActions() {
         m_info->hide();
         m_actions->clear();
         const bool selected = !m_marked.isEmpty();
         if (selected) {
-            addMenuOption(u8("Копировать"), ActCopy);
+            if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
+                addMenuOption(u8("Сделать домашней"), ActHome);
             addMenuOption(u8("Вырезать"), ActCut);
-            addMenuOption((TRASH_ENABLED && !pathWithin(m_path, m_trash))
-                          ? u8("В корзину") : u8("Удалить"), ActDelete);
-            if (m_marked.size() == 1) {
-                addMenuOption(u8("Сведения"), ActInfo);
-                const QString selectedPath = *m_marked.begin();
-                if (validHomeFolder(m_root, selectedPath)) addMenuOption(u8("Сделать домашней"), ActHome);
-            }
-            addMenuOption(u8("Создать ZIP-архив"), ActZip);
-            addMenuOption(u8("Снять выбор"), ActClear);
+            addMenuSeparator();
+            addMenuOption(u8("Архивировать"), ActZip);
         }
-        if (!m_clip.isEmpty()) {
-            addMenuOption(m_clipCut ? u8("Переместить сюда") : u8("Вставить"), ActPaste);
-            addMenuOption(u8("Очистить буфер"), ActDrop);
+        if (!m_clip.isEmpty()) addMenuOption(u8("Вставить"), ActPaste);
+        if (selected) {
+            addMenuOption(u8("Копировать"), ActCopy);
+            addMenuOption(u8("Удалить"), ActDelete);
+            if (m_marked.size() == 1) addMenuOption(u8("Переименовать"), ActRename);
         }
+        addMenuSeparator();
         addMenuOption(u8("Закрыть меню"), ActClose);
         placeActionMenu();
         m_actions->setVisible(m_menuRequested && !m_settings->isVisible() && !m_confirm->isVisible());
         if (m_actions->isVisible()) m_actions->raise();
     }
-
     void runMenuAction(int action) {
         m_menuRequested = false;
         m_actions->hide();
@@ -2982,7 +3041,6 @@ private:
             if (TRASH_ENABLED && !pathWithin(m_path, m_trash)) moveToTrash();
             else requestDeletion(1);
             break;
-        case ActInfo: showInfo(); break;
         case ActZip: zipSelected(); break;
         case ActHome:
             if (m_marked.size() == 1 && writeHomeFolder(m_root, u8(KOBROWSE_HOME), *m_marked.begin())) {
@@ -2990,17 +3048,34 @@ private:
                 showMessage(u8("Домашняя папка сохранена"));
             } else showMessage(u8("Не удалось сохранить домашнюю папку"));
             break;
-        case ActClear: m_marked.clear(); m_selectionOrder.clear(); load(); break;
+        case ActRename: startRename(); break;
         case ActPaste: paste(); break;
-        case ActDrop: m_clip.clear(); updateActions(); break;
         case ActClose:
             m_marked.clear(); m_selectionOrder.clear();
-            for (int i = 0; i < m_list->topLevelItemCount(); ++i)
-                setMarkedLook(m_list->topLevelItem(i), false);
+            for (int i = 0; i < m_list->topLevelItemCount(); ++i) setMarkedLook(m_list->topLevelItem(i), false);
             m_list->viewport()->update();
             break;
         default: break;
         }
+    }
+    void startRename() {
+        if (m_marked.size() != 1) return;
+        const QString source = *m_marked.begin();
+        if (!safeLocalPath(m_root, source) || isProtected(source)) {
+            showMessage(u8("Защищённый путь нельзя переименовать")); return;
+        }
+        QPointer<KobrowseWindow> self(this);
+        krename_open(QFileInfo(source).fileName(), [self, source](const QString &name) -> QString {
+            if (!self) return u8("Окно закрыто");
+            QString error;
+            if (!renameLocalEntry(self->m_root, source, name, error)) return error;
+            const QString dest = QFileInfo(source).absolutePath() + u8("/") + name;
+            for (int i = 0; i < self->m_clip.size(); ++i)
+                if (pathWithin(self->m_clip[i], source)) self->m_clip[i] = dest + self->m_clip[i].mid(source.size());
+            self->m_marked.clear(); self->m_selectionOrder.clear(); self->load();
+            self->showMessage(u8("Переименовано: ") + name);
+            return QString();
+        });
     }
 
     // Копировать / Вырезать: запомнить отмеченное, снять выбор
@@ -3079,6 +3154,8 @@ private:
             || !safeLocalPath(m_root, m_trash)) {
             showMessage(u8("Корзина недоступна")); return;
         }
+        if (!pathWithin(m_path, m_trash)) m_trashReturn = m_path;
+        m_menuRequested = false; m_actions->hide();
         m_path = m_trash;
         m_marked.clear(); m_selectionOrder.clear();
         load();
@@ -3148,14 +3225,14 @@ private:
     void load() {
         if (m_unzip) m_unzip->hide();
         m_pathLabel->setText(m_path);
-        m_fileCount = 0; m_dirCount = 0;
+        m_fileCount = 0; m_dirCount = 0; m_pageIndex = 0; m_pageStarts.clear();
         m_list->clear();
         updateActions();
 
         QDir dir(m_path);
         if (!dir.isReadable()) {
             new QTreeWidgetItem(m_list, QStringList() << u8("Нет доступа к папке"));
-            updatePageInfo();
+            m_pageTimer.start(0);
             return;
         }
 
@@ -3195,10 +3272,10 @@ private:
 
         if (m_path != m_root) {
             QTreeWidgetItem *parent = new QTreeWidgetItem(m_list);
-            parent->setText(0, u8(".."));
+            parent->setText(0, m_path == m_trash ? u8("Закрыть корзину") : u8(".."));
             parent->setData(0, ROLE_DIR, true);
             parent->setData(0, ROLE_PARENT, true);
-            parent->setData(0, ROLE_DETAIL, u8("Родительская папка"));
+            parent->setData(0, ROLE_DETAIL, m_path == m_trash ? u8("Вернуться к файлам") : u8("Родительская папка"));
         }
         for (const QFileInfo &fi : entries) {
             if (fi.fileName().endsWith(u8(".kobrowse_tmp"))) continue; // недокопированные файлы не показываем
@@ -3220,13 +3297,41 @@ private:
         m_pageTimer.start(0);
     }
 
+    void recalculatePages() {
+        if (!m_list || !m_list->isVisible() || m_list->viewport()->height() <= 1) return;
+        const int anchor = m_pageStarts.empty() ? 0 : m_pageStarts[std::min(m_pageIndex, int(m_pageStarts.size()) - 2)];
+        const int available = m_list->viewport()->height();
+        m_fileDelegate->setMaxRowHeight(available);
+        std::vector<int> heights;
+        const QStyleOptionViewItem option;
+        for (int i = 0; i < m_list->topLevelItemCount(); ++i)
+            heights.push_back(m_fileDelegate->sizeHint(option, m_list->model()->index(i, 0)).height());
+        m_pageStarts = pageBoundaries(heights, available);
+        m_pageIndex = 0;
+        for (int i = 0; i + 1 < int(m_pageStarts.size()); ++i)
+            if (anchor >= m_pageStarts[i] && anchor < m_pageStarts[i + 1]) { m_pageIndex = i; break; }
+        applyPage();
+    }
+    void applyPage() {
+        if (m_pageStarts.size() < 2) return;
+        m_pageIndex = qBound(0, m_pageIndex, int(m_pageStarts.size()) - 2);
+        const int begin = m_pageStarts[m_pageIndex], end = m_pageStarts[m_pageIndex + 1];
+        for (int i = 0; i < m_list->topLevelItemCount(); ++i)
+            m_list->topLevelItem(i)->setHidden(i < begin || i >= end);
+        m_list->doItemsLayout(); m_list->scrollToTop();
+        updatePageInfo();
+    }
+    void turnPage(int direction) {
+        if (m_pageStarts.size() < 2) return;
+        const int next = qBound(0, m_pageIndex + direction, int(m_pageStarts.size()) - 2);
+        if (next != m_pageIndex) { m_pageIndex = next; applyPage(); }
+    }
     void updatePageInfo() {
-        if (!m_pageLabel || !m_countLabel || !m_prev || !m_next || !m_list) return;
-        QScrollBar *bar = m_list->verticalScrollBar();
-        const PageState page = pageState(bar->value(), bar->maximum(), m_list->viewport()->height());
-        m_prev->setEnabled(page.previous); m_next->setEnabled(page.next);
+        if (!m_pageLabel || !m_countLabel || !m_prev || !m_next) return;
+        const int total = qMax(1, int(m_pageStarts.size()) - 1);
+        m_prev->setEnabled(m_pageIndex > 0); m_next->setEnabled(m_pageIndex + 1 < total);
         m_prev->update(); m_next->update();
-        m_pageLabel->setText(u8("%1 / %2").arg(page.current).arg(page.total));
+        m_pageLabel->setText(u8("%1 / %2").arg(m_pageIndex + 1).arg(total));
         m_countLabel->setText(u8("файлов: %1  папок: %2").arg(m_fileCount).arg(m_dirCount));
     }
 
@@ -3238,6 +3343,7 @@ private:
         if (path.isEmpty()) return;
         if (!safeLocalPath(m_root, path)) { showMessage(u8("Ссылка или путь вне накопителя недоступен")); return; }
         if (it->data(0, ROLE_DIR).toBool()) {
+            if (path == m_trash && !pathWithin(m_path, m_trash)) m_trashReturn = m_path;
             m_path = path;
             m_marked.clear(); m_selectionOrder.clear();
             load();
@@ -3505,6 +3611,7 @@ private:
         m_pathLabel->setVisible(!on);
         m_nav->setVisible(!on);
         m_toolbar->setVisible(!on);
+        m_headerLine->setVisible(!on); m_pathLine->setVisible(!on); m_footerLine->setVisible(!on);
         m_info->hide();
         m_msg->hide();
         m_settings->setVisible(on);
@@ -3516,7 +3623,7 @@ private:
                 m_list->viewport()->update();
             }
             m_menuRequested = false; m_actions->hide(); m_setGeom.start();
-        } else updateActions();
+        } else { updateActions(); m_pageTimer.start(0); }
     }
 
     // Диагностика: геометрия строк настроек после раскладки (пишется в kobrowse.log).
@@ -3597,14 +3704,19 @@ private:
 
     void goUp() {
         if (m_path == m_root) return;
-        QString parent = QFileInfo(m_path).absolutePath();
+        QString parent = m_path == m_trash && safeLocalPath(m_root, m_trashReturn)
+            && QFileInfo(m_trashReturn).isDir() ? m_trashReturn : QFileInfo(m_path).absolutePath();
         if (!parent.startsWith(m_root)) parent = m_root; // не выходим за корень
         m_path = parent;
         m_marked.clear(); m_selectionOrder.clear();
         load();
     }
 
-    QString       m_root, m_trash, m_path;
+    QString       m_root, m_trash, m_path, m_trashReturn;
+    std::vector<int> m_pageStarts;
+    int m_pageIndex = 0;
+    RowDelegate *m_fileDelegate = nullptr;
+    QFrame *m_headerLine = nullptr, *m_pathLine = nullptr, *m_footerLine = nullptr;
     bool          m_showHidden;
     bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
@@ -3618,7 +3730,7 @@ private:
     QPoint        m_pressPos;
     int           m_scrollStart = 0;
     bool          m_twoFinger = false, m_moved = false;
-    qreal         m_twoStartY = 0;
+    qreal         m_twoStartY = 0, m_twoCurrentY = 0;
     int           m_tapLog = LOG_TAPS;
     QString       m_lastMarked;
     QElapsedTimer m_press;
@@ -3641,7 +3753,8 @@ private:
     QWidget      *m_confirm = nullptr;
     QLabel       *m_confirmText = nullptr;
     ChromeButton *m_prev = nullptr, *m_next = nullptr;
-    QLabel *m_pageLabel = nullptr, *m_countLabel = nullptr;
+    QLabel *m_pageLabel = nullptr;
+    QPushButton *m_countLabel = nullptr;
     int m_fileCount = 0, m_dirCount = 0;
     QScrollArea *m_settingsScroll = nullptr;
     QWidget *m_generalBlock = nullptr;
@@ -3662,7 +3775,7 @@ static QTimer              *g_poll = nullptr;  // страховка: inotify н
 // Do not hook the same power/USB PLT entries: NickelHook replaces, rather than chains,
 // another plugin's hook (notably Kobalt's shutdown save/drain).
 static QTimer *g_lifecycleClose = nullptr;
-static QPointer<QObject> g_plugManager, g_powerManager;
+static QPointer<QObject> g_plugManager;
 static void closeForLifecycle() {
     if (g_reopen) g_reopen->stop();
     if (g_search) g_search->close();
@@ -3672,30 +3785,18 @@ static void closeForLifecycle() {
 static void setupLifecycleSignals() {
     typedef QObject *(*Manager)();
     Manager plug = nsym<Manager>("_ZN11PlugManager14sharedInstanceEv");
-    Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
     QObject *p = plug ? plug() : nullptr;
-    QObject *w = power ? power() : nullptr;
     if (p && p != g_plugManager) {
         g_plugManager = p;
         QObject::connect(p, SIGNAL(plugged()), g_lifecycleClose, SLOT(start()), Qt::AutoConnection);
-    }
-    if (w && w != g_powerManager) {
-        g_powerManager = w;
-        QObject::connect(w, SIGNAL(aboutToSleep()), g_lifecycleClose, SLOT(start()), Qt::AutoConnection);
     }
     // Fallback if a signal was missed, using the same optional Nickel queries as Kobalt.
     typedef const void *(*GetManager)();
     typedef bool (*Query)(const void *);
     GetManager usbWorkflow = nsym<GetManager>("_ZN19PlugWorkflowManager14sharedInstanceEv");
     Query usbVisible = nsym<Query>("_ZN19PlugWorkflowManager20pluggedInViewVisibleEv");
-    GetManager powerWorkflow = nsym<GetManager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
-    Query sleeping = nsym<Query>("_ZNK22N3PowerWorkflowManager8sleepingEv");
-    Query sleepVisible = nsym<Query>("_ZNK22N3PowerWorkflowManager16sleepViewVisibleEv");
     const void *usb = usbWorkflow ? usbWorkflow() : nullptr;
-    const void *pm = powerWorkflow ? powerWorkflow() : nullptr;
-    if ((usb && usbVisible && usbVisible(usb)) ||
-        (pm && ((sleeping && sleeping(pm)) || (sleepVisible && sleepVisible(pm)))))
-        closeForLifecycle();
+    if (usb && usbVisible && usbVisible(usb)) closeForLifecycle();
 }
 
 // Главное окно Nickel. MWC_currentView на главном экране может вернуть nullptr —

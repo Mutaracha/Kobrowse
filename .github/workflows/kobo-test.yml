@@ -21,6 +21,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config zlib1g-dev
       - name: Test filesystem policies
         run: bash tests/run-file-policy-tests.sh
+      - name: Test whole-row pagination (offscreen)
+        run: bash tests/run-pagination-ui-tests.sh
       - name: Test ZIP creation
         run: bash tests/run-zip-tests.sh
       - name: Test package checks
