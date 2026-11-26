@@ -18,9 +18,11 @@ jobs:
           persist-credentials: false
           submodules: true
       - name: Install Qt 5 for filesystem tests
-        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config zlib1g-dev
       - name: Test filesystem policies
         run: bash tests/run-file-policy-tests.sh
+      - name: Test ZIP creation
+        run: bash tests/run-zip-tests.sh
       - name: Test package checks
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify Qt 5 test package

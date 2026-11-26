@@ -2,8 +2,9 @@
 include NickelHook/NickelHook.mk
 
 override LIBRARY  := libkobrowse.so
-override SOURCES  += src/kobrowse.cc
+override SOURCES  += src/kobrowse.cc src/zip_writer.cc
 override PKGCONF  += Qt5Widgets
+override LDFLAGS  += -lz
 override CXXFLAGS += -Wall -Wextra -Wno-missing-field-initializers
 override SKIPCONFIGURE += package
 override KOBOROOT += res/nm_kobrowse:/mnt/onboard/.adds/nm/kobrowse

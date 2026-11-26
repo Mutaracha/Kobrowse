@@ -59,6 +59,9 @@
 #include <NickelHook.h>
 
 #include "file_policy.h"
+#include "zip_writer.h"
+#include <dirent.h>
+#include <cerrno>
 
 // ---------- настройки ----------
 static const char *KOBROWSE_ROOT    = "/mnt/onboard";   // выше этой папки не поднимаемся
@@ -2379,9 +2382,10 @@ public:
         m_bCut   = addButtonAt(agrid, 0, 3, 3, fBtn, "Вырезать", I_CUT);
         m_bTrash = addButtonAt(agrid, 0, 6, 3, fBtn, "В корзину", I_TRASH);
         m_bInfo  = addButtonAt(agrid, 0, 9, 3, fBtn, "Сведения", I_INFO);
-        m_bClear = addButtonAt(agrid, 1, 0, 4, fBtn, "Снять выбор", I_DESELECT);
-        m_bPaste = addButtonAt(agrid, 1, 4, 4, fBtn, "Вставить", I_CLIPBOARD);
-        m_bDrop  = addButtonAt(agrid, 1, 8, 4, fBtn, "Очистить буфер", I_CLIPBOARD_X);
+        m_bZip   = addButtonAt(agrid, 1, 0, 3, fBtn, "В ZIP", I_NONE);
+        m_bClear = addButtonAt(agrid, 1, 3, 3, fBtn, "Снять выбор", I_DESELECT);
+        m_bPaste = addButtonAt(agrid, 1, 6, 3, fBtn, "Вставить", I_CLIPBOARD);
+        m_bDrop  = addButtonAt(agrid, 1, 9, 3, fBtn, "Очистить буфер", I_CLIPBOARD_X);
         lay->addWidget(m_actions);
 
         // Ряд 1 — навигация: 4 кнопки + 2 широкие под ними (крупные подписи)
@@ -2411,6 +2415,7 @@ public:
         connect(m_bCut,   &QPushButton::clicked, [this]() { toClipboard(true); });
         connect(m_bTrash, &QPushButton::clicked, [this]() { moveToTrash(); });
         connect(m_bInfo,  &QPushButton::clicked, [this]() { showInfo(); });
+        connect(m_bZip,   &QPushButton::clicked, [this]() { zipSelected(); });
         connect(m_bClear, &QPushButton::clicked, [this]() { m_marked.clear(); load(); });
         connect(m_bPaste, &QPushButton::clicked, [this]() { paste(); });
         connect(m_bDrop,  &QPushButton::clicked, [this]() { m_clip.clear(); updateActions(); });
@@ -2719,6 +2724,7 @@ private:
         m_bCut->setVisible(sel);
         m_bTrash->setVisible(sel);
         m_bInfo->setVisible(m_marked.size() == 1);
+        m_bZip->setVisible(sel);
         m_bClear->setVisible(sel);
         m_bPaste->setVisible(!sel && clip);
         m_bDrop->setVisible(!sel && clip);
@@ -2784,6 +2790,22 @@ private:
         if (!err.isEmpty()) showMessage(err);
     }
 
+    // Архив создаётся рядом с выбранными элементами, исходники не меняются.
+    void zipSelected() {
+        QStringList sources = m_marked.values();
+        if (sources.isEmpty()) return;
+        sources.sort();
+        const QString name = sources.size() == 1
+            ? QFileInfo(sources.first()).fileName() + u8(".zip") : u8("Архив.zip");
+        const QString dest = uniqueName(m_path, name, false);
+        QString error;
+        if (!createZipArchive(m_root, dest, sources, error)) { showMessage(error); return; }
+        ::sync();
+        m_marked.clear();
+        load();
+        showMessage(u8("Создан архив: ") + QFileInfo(dest).fileName());
+    }
+
     // В корзину: перенос в /mnt/onboard/.kobrowse_trash с датой в начале имени
     void moveToTrash() {
         if (!safeLocalPath(m_root, m_trash, true) || !QDir().mkpath(m_trash)
@@ -2824,6 +2846,29 @@ private:
         // дескрипторы на /mnt/onboard не удерживаются (важно для USB-режима)
         const QFileInfoList entries =
             browserEntries(dir, m_showHidden);
+        if (m_path == m_root && !m_rootDiagLogged) {
+            m_rootDiagLogged = true;
+            bool qtAdds = false, qtDisabled = false, fsAdds = false, fsDisabled = false;
+            for (const QFileInfo &fi : entries) {
+                if (fi.fileName() == u8(".adds")) qtAdds = true;
+                if (fi.fileName() == u8(".disabled")) qtDisabled = true;
+            }
+            int dirError = 0;
+            DIR *raw = ::opendir(QFile::encodeName(m_root).constData());
+            if (raw) {
+                errno = 0;
+                while (struct dirent *entry = ::readdir(raw)) {
+                    if (strcmp(entry->d_name, ".adds") == 0) fsAdds = true;
+                    if (strcmp(entry->d_name, ".disabled") == 0) fsDisabled = true;
+                }
+                dirError = errno;
+                ::closedir(raw);
+            } else dirError = errno;
+            klog(u8("root listing hidden=%1 qt_adds=%2 fs_adds=%3 exists_adds=%4 "
+                    "qt_disabled=%5 fs_disabled=%6 exists_disabled=%7 dir_errno=%8")
+                 .arg(m_showHidden).arg(qtAdds).arg(fsAdds).arg(QFileInfo(m_root + u8("/.adds")).exists())
+                 .arg(qtDisabled).arg(fsDisabled).arg(QFileInfo(m_root + u8("/.disabled")).exists()).arg(dirError));
+        }
 
         if (m_path != m_root) {
             QTreeWidgetItem *parent = new QTreeWidgetItem(m_list);
@@ -3145,6 +3190,7 @@ private:
 
     QString       m_root, m_trash, m_path;
     bool          m_showHidden;
+    bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
     QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom;
     QPoint        m_pressPos;
@@ -3171,7 +3217,7 @@ private:
     QWidget      *m_actions = nullptr;
     QPushButton  *m_btnUp = nullptr;
     QPushButton  *m_bCopy = nullptr, *m_bCut = nullptr, *m_bTrash = nullptr, *m_bClear = nullptr, *m_bInfo = nullptr;
-    QPushButton  *m_bPaste = nullptr, *m_bDrop = nullptr;
+    QPushButton  *m_bPaste = nullptr, *m_bDrop = nullptr, *m_bZip = nullptr;
     QList<ButtonFace *> m_faces, m_wideFaces;    // подписи всех кнопок — для общего кегля
 };
 
