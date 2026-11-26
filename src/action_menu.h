@@ -2,6 +2,30 @@
 #define KOBROWSE_ACTION_MENU_H
 #include <QList>
 #include <QTreeWidget>
+#include <QStyledItemDelegate>
+#include <QPainter>
+
+// One dark line, instead of two adjacent item borders.
+class ActionMenuDelegate : public QStyledItemDelegate {
+public:
+    explicit ActionMenuDelegate(QObject *parent = nullptr) : QStyledItemDelegate(parent) {}
+    void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        if (!(index.flags() & Qt::ItemIsEnabled)) {
+            p->save();
+            p->fillRect(option.rect, Qt::white);
+            p->setPen(QColor(80, 80, 80));
+            p->drawLine(option.rect.left() + 8, option.rect.center().y(),
+                        option.rect.right() - 8, option.rect.center().y());
+            p->restore();
+            return;
+        }
+        QStyledItemDelegate::paint(p, option, index);
+    }
+};
+
+inline bool emptyFooterTap(QWidget *footer, const QPoint &pointInFooter) {
+    return footer && footer->rect().contains(pointInFooter) && !footer->childAt(pointInFooter);
+}
 
 struct ActionMenuEntry {
     QString text;

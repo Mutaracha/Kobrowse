@@ -67,6 +67,7 @@
 #include "home_folder.h"
 #include "action_menu.h"
 #include "item_style.h"
+#include "file_kind.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -80,7 +81,7 @@ static const char *KOBROWSE_INI     = "/mnt/onboard/.adds/kobrowse/kobrowse.ini"
 static const int   LOG_TAPS     = 30;  // отладка: сколько касаний записать в лог
 static const int   SWIPE_PX     = 40;  // сдвиг пальца больше этого — перетаскивание, а не нажатие
 static const char *KOBROWSE_TRASH   = "/mnt/onboard/.kobrowse_trash"; // корзина (папка с точкой — Nickel её не индексирует)
-static const char *KOBROWSE_LOG     = "/mnt/onboard/.adds/kobrowse/kobrowse.log";
+static const char *KOBROWSE_LOG     = "/mnt/onboard/.adds/kobrowse/logs/kobrowse.log";
 static const int   LOG_EVENTS   = 0;   // сколько событий окна записать в лог (отладка)
 
 // Функции Nickel (libnickel), загружаются при старте плагина
@@ -123,6 +124,7 @@ static const CfgKey CFG_KEYS[] = {
     { "long_tap_ms",   "500",         "долгое нажатие (выбор строки), мс" },
     { "idle_min",      "2",           "закрыть менеджер, если не было касаний, мин" },
     { "trash_enabled", "1",           "использовать корзину: 1 — да, 0 — удалять после подтверждения" },
+    { "logging_enabled", "1",          "журнал отладки Kobrowse: 1 — вести, 0 — выключить" },
     { "show_hidden",   "1",           "показывать скрытые файлы и папки (с точкой): 1 — да, 0 — нет" },
     { "scale_pct",     "100",         "общий масштаб интерфейса kobrowse, %: 100 — как на Clara HD (по ширине экрана); 50–200" },
     { "open_books",    "auto",        "открытие книг тапом: auto — только на проверенной прошивке 4.38; 1 — всегда (на свой риск); 0 — никогда" },
@@ -222,7 +224,13 @@ static void loadConfig() {
 
 // Отладочный лог: файл открывается и сразу закрывается (не держим дескриптор на /mnt/onboard)
 static void klog(const QString &msg) {
-    QDir().mkpath(QFileInfo(u8(KOBROWSE_LOG)).absolutePath());
+    const QString app = u8(KOBROWSE_ROOT) + u8("/.adds/kobrowse");
+    if (!safeLocalPath(u8(KOBROWSE_ROOT), app) || !QFileInfo(app).isDir()) return;
+    QSettings st(u8(KOBROWSE_INI), QSettings::IniFormat);
+    if (!st.value(u8("kobrowse/logging_enabled"), 1).toBool()) return;
+    const QString dir = QFileInfo(u8(KOBROWSE_LOG)).absolutePath();
+    if (!safeLocalPath(u8(KOBROWSE_ROOT), dir, true) || !QDir().mkpath(dir)
+        || !safeLocalPath(u8(KOBROWSE_ROOT), dir)) return;
     QFile f(u8(KOBROWSE_LOG));
     if (f.open(QIODevice::Append | QIODevice::Text)) {
         f.write((QDateTime::currentDateTime().toString(u8("hh:mm:ss ")) + msg + u8("\n")).toUtf8());
@@ -258,7 +266,8 @@ static const int ROLE_PATH = Qt::UserRole,     // полный путь
                  ROLE_MARK = Qt::UserRole + 2, // строка отмечена
                  ROLE_DETAIL = Qt::UserRole + 4, // дата и размер
                  ROLE_PARENT = Qt::UserRole + 5, // специальная строка «..»
-                 ROLE_READONLY = Qt::UserRole + 6; // защита от операций
+                 ROLE_READONLY = Qt::UserRole + 6, // защита от операций
+                 ROLE_KIND = Qt::UserRole + 7; // тип файла для значка
 
 // Разбивка текста на строки по ширине: по словам, а слово длиннее строки — где угодно.
 // Возвращает высоту; если painter задан — ещё и рисует.
@@ -317,7 +326,26 @@ public:
             folder.closeSubpath();
             p->drawPath(folder);
         } else {
-            p->drawRect(r.adjusted(sz * .16, sz * .06, -sz * .16, -sz * .06));
+            const QRectF box = r.adjusted(sz * .13, sz * .07, -sz * .13, -sz * .07);
+            p->drawRect(box);
+            const int kind = idx.data(ROLE_KIND).toInt();
+            if (kind == FileBook) {
+                p->drawLine(QPointF(box.left() + sz * .12, box.top()), QPointF(box.left() + sz * .12, box.bottom()));
+                p->drawLine(QPointF(box.left() + sz * .23, box.top() + sz * .27), QPointF(box.right() - sz * .10, box.top() + sz * .27));
+                p->drawLine(QPointF(box.left() + sz * .23, box.top() + sz * .40), QPointF(box.right() - sz * .10, box.top() + sz * .40));
+            } else if (kind == FileImage) {
+                p->drawEllipse(QPointF(box.left() + sz * .20, box.top() + sz * .21), sz * .06, sz * .06);
+                QPolygonF mountains;
+                mountains << QPointF(box.left() + sz * .05, box.bottom() - sz * .10)
+                          << QPointF(box.left() + sz * .28, box.top() + sz * .48)
+                          << QPointF(box.left() + sz * .40, box.top() + sz * .60)
+                          << QPointF(box.left() + sz * .52, box.top() + sz * .43)
+                          << QPointF(box.right() - sz * .05, box.bottom() - sz * .10);
+                p->drawPolyline(mountains);
+            } else if (kind == FileArchive) {
+                p->drawLine(QPointF(box.center().x(), box.top()), QPointF(box.center().x(), box.bottom() - sz * .16));
+                p->drawRect(QRectF(box.center().x() - sz * .07, box.bottom() - sz * .20, sz * .14, sz * .12));
+            }
         }
         p->setPen(ink);
         const QPointF pos(opt.rect.left() + PAD_H * 2 + sz, opt.rect.top() + PAD_V);
@@ -2306,6 +2334,7 @@ static const SetItem SET_ITEMS[] = {
     { "long_tap_ms",   "Долгое нажатие, мс",     S_NUM,  50,  150, 3000, 0 },
     { "idle_min",      "Автозакрытие, мин",      S_NUM,  0.5, 0.5, 60,   1 },
     { "trash_enabled", "Корзина",                 S_BOOL, 0,   0,   1,    0 },
+    { "logging_enabled", "Журнал отладки",         S_BOOL, 0,   0,   1,    0 },
     { "show_hidden",   "Скрытые файлы",          S_BOOL, 0,   0,   1,    0 },
     { "scale_pct",     "Масштаб, %",             S_NUM,  5,   50,  200,  0 },
     { "open_books",    "Открытие книг",          S_OPEN, 0,   0,   0,    0 },
@@ -2317,12 +2346,16 @@ static const SetItem SET_ITEMS[] = {
     { "search_list_font", "Гарнитура результатов поиска", S_FONT, 0, 0, 0, 0 },
 };
 static const int SET_COUNT = int(sizeof(SET_ITEMS) / sizeof(SET_ITEMS[0]));
-static bool isFontSetting(int i) {
+static int settingsTab(int i) {
     const QString key = QString::fromLatin1(SET_ITEMS[i].key);
-    return key == u8("list_pt") || key == u8("list_font") || key == u8("btn_pt")
+    if (key == u8("list_pt") || key == u8("list_font") || key == u8("btn_pt")
         || key == u8("btn_font") || key == u8("info_pt") || key == u8("opds_key_pt")
         || key == u8("opds_func_pt") || key == u8("key_font_pt") || key == u8("func_pt")
-        || key == u8("search_list_pt") || key == u8("search_list_font");
+        || key == u8("search_list_pt") || key == u8("search_list_font")) return 2;
+    if (key == u8("scale_pct") || key == u8("gap_pt") || key == u8("btn_pad_pt")
+        || key == u8("btn_height_pt") || key == u8("icon_pt") || key == u8("btn_radius_pt")
+        || key == u8("btn_line_pt")) return 1;
+    return 0;
 }
 
 // Записать значения в kobrowse.ini: строка «ключ=…» заменяется, комментарии сохраняются
@@ -2346,10 +2379,10 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
         }
         if (!found) lines << keys[i] + u8("=") + vals[i];
     }
-    QFile f(ini);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) return false;
-    f.write(lines.join(u8("\n")).toUtf8());
-    f.close();
+    QSaveFile f(ini);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+    const QByteArray output = lines.join(u8("\n")).toUtf8();
+    if (f.write(output) != output.size() || !f.commit()) return false;
     ::sync();
     return true;
 }
@@ -2407,7 +2440,6 @@ public:
         connect(find, &QPushButton::clicked, [this]() { ksearch_open(); });
         connect(settings, &QPushButton::clicked, [this]() { showSettings(true); });
         lay->addWidget(m_toolbar);
-        m_headerLine = new QFrame(this); m_headerLine->setFrameShape(QFrame::HLine); lay->addWidget(m_headerLine);
 
         // Текущий путь остаётся видимым при прокрутке списка.
         m_pathLabel = new QLabel(this);
@@ -2415,8 +2447,8 @@ public:
         m_pathLabel->setFont(pathFont);
         m_pathLabel->setWordWrap(true);
         m_pathLabel->setTextFormat(Qt::PlainText);
+        m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:6px;"));
         lay->addWidget(m_pathLabel);
-        m_pathLine = new QFrame(this); m_pathLine->setFrameShape(QFrame::HLine); lay->addWidget(m_pathLine);
 
         // Список файлов и папок
         m_list = new QTreeWidget(this);
@@ -2495,7 +2527,8 @@ public:
         m_actions->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_actions->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         m_actions->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
-                                   "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"));
+                                   "QTreeWidget::item{padding-left:12px;}"));
+        m_actions->setItemDelegate(new ActionMenuDelegate(m_actions));
         m_actions->hide();
         connect(m_actions, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int) {
             if (it && (it->flags() & Qt::ItemIsEnabled)) runMenuAction(it->data(0, Qt::UserRole).toInt());
@@ -2513,7 +2546,7 @@ public:
         m_confirmText->setStyleSheet(u8("border:none;"));
         confirmLayout->addWidget(m_confirmText);
         QHBoxLayout *confirmButtons = new QHBoxLayout();
-        QPushButton *confirmYes = makeButton(confirmButtons, fBtn, "Удалить", BTN_HEIGHT, 1);
+        QPushButton *confirmYes = makeButton(confirmButtons, fBtn, "Да", BTN_HEIGHT, 1);
         QPushButton *confirmNo = makeButton(confirmButtons, fBtn, "Отмена", BTN_HEIGHT, 1);
         confirmLayout->addLayout(confirmButtons);
         connect(confirmYes, &QPushButton::clicked, [this]() { confirmDeletion(); });
@@ -2745,6 +2778,10 @@ private:
                 if (item && (item->flags() & Qt::ItemIsEnabled)) runMenuAction(item->data(0, Qt::UserRole).toInt());
                 return;
             }
+            if (m_nav->isVisible() && emptyFooterTap(m_nav, m_nav->mapFrom(this, p))) {
+                runMenuAction(ActClose);
+                return;
+            }
         }
         if (m_confirm->isVisible()) {
             QWidget *target = childAt(p);
@@ -2968,12 +3005,12 @@ private:
             if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
                 entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row);
             entries << ActionMenuEntry(u8("Вырезать"), ActCut, row)
-                    << ActionMenuEntry(QString(), 0, separator, false)
-                    << ActionMenuEntry(u8("Архивировать"), ActZip, row);
+                    << ActionMenuEntry(u8("Копировать"), ActCopy, row);
         }
         if (!m_clip.isEmpty()) entries << ActionMenuEntry(u8("Вставить"), ActPaste, row);
         if (selected) {
-            entries << ActionMenuEntry(u8("Копировать"), ActCopy, row)
+            entries << ActionMenuEntry(QString(), 0, separator, false)
+                    << ActionMenuEntry(u8("Архивировать"), ActZip, row)
                     << ActionMenuEntry(u8("Удалить"), ActDelete, row);
             if (m_marked.size() == 1) entries << ActionMenuEntry(u8("Переименовать"), ActRename, row);
         }
@@ -3111,6 +3148,17 @@ private:
         load();
     }
 
+    void leaveSettingsForTrash(bool empty) {
+        if (m_setVals != m_initialSetVals || m_resetHomeDraft) {
+            m_pendingDelete = empty ? 6 : 5;
+            m_confirmText->setText(u8("Несохранённые настройки будут потеряны. Продолжить?"));
+            m_confirm->show();
+            return;
+        }
+        showSettings(false);
+        if (empty) requestDeletion(2); else openTrash();
+    }
+
     void requestDeletion(int action) {
         if (action == 1 && m_marked.isEmpty()) return;
         m_pendingDelete = action;
@@ -3125,6 +3173,29 @@ private:
         const int action = m_pendingDelete;
         m_pendingDelete = 0;
         m_confirm->hide();
+        if (action == 5 || action == 6) {
+            showSettings(false);
+            if (action == 6) requestDeletion(2); else openTrash();
+            return;
+        }
+        if (action == 4) {
+            for (int i = 0; i < SET_COUNT; ++i) m_setVals[i] = cfgDefault(u8(SET_ITEMS[i].key));
+            m_resetHomeDraft = true;
+            setButtonFace(m_resetHomeButton, I_NONE, u8("Сброс домашней: да"));
+            refreshSettings();
+            return;
+        }
+        if (action == 3) {
+            const QString logs = QFileInfo(u8(KOBROWSE_LOG)).absolutePath();
+            const QString legacy = u8(KOBROWSE_ROOT) + u8("/.adds/kobrowse/kobrowse.log");
+            bool ok = true;
+            if (QFileInfo(logs).exists() || QFileInfo(logs).isSymLink())
+                ok = safeLocalPath(m_root, logs) && removeTreeNoFollow(m_root, logs);
+            if (QFileInfo(legacy).exists() || QFileInfo(legacy).isSymLink())
+                ok = safeLocalPath(m_root, legacy) && QFile::remove(legacy) && ok;
+            showMessage(ok ? u8("Журнал очищен") : u8("Не удалось очистить журнал"));
+            return;
+        }
         if (action != 1 && action != 2) return;
         QStringList paths;
         if (action == 2) {
@@ -3243,6 +3314,7 @@ private:
             it->setData(0, ROLE_PATH, path);
             it->setData(0, ROLE_DIR, isDir);
             it->setData(0, ROLE_READONLY, readOnly);
+            it->setData(0, ROLE_KIND, int(isDir ? FileGeneric : fileKind(fi.fileName())));
             if (m_marked.contains(path)) setMarkedLook(it, true);
         }
         m_list->scrollToTop();
@@ -3380,10 +3452,12 @@ private:
         v->addWidget(title);
         QHBoxLayout *tabs = new QHBoxLayout();
         m_generalTab = makeButton(tabs, fBtn, "Общие", qMax(40, BTN_HEIGHT / 2), 1);
+        m_viewTab = makeButton(tabs, fBtn, "Вид", qMax(40, BTN_HEIGHT / 2), 1);
         m_fontTab = makeButton(tabs, fBtn, "Шрифты", qMax(40, BTN_HEIGHT / 2), 1);
         v->addLayout(tabs);
-        connect(m_generalTab, &QPushButton::clicked, [this]() { setSettingsTab(false); });
-        connect(m_fontTab, &QPushButton::clicked, [this]() { setSettingsTab(true); });
+        connect(m_generalTab, &QPushButton::clicked, [this]() { setSettingsTab(0); });
+        connect(m_viewTab, &QPushButton::clicked, [this]() { setSettingsTab(1); });
+        connect(m_fontTab, &QPushButton::clicked, [this]() { setSettingsTab(2); });
 
         m_settingsScroll = new QScrollArea(m_settings);
         m_settingsScroll->setWidgetResizable(true);
@@ -3405,15 +3479,24 @@ private:
         QPushButton *empty = makeButton(trashRow, fBtn, "Очистить корзину", rowH, 1);
         general->addLayout(trashRow);
         QHBoxLayout *homeRow = new QHBoxLayout();
-        QPushButton *resetHome = makeButton(homeRow, fBtn, "Сбросить домашнюю папку", rowH, 1);
+        m_resetHomeButton = makeButton(homeRow, fBtn, "Сбросить домашнюю папку", rowH, 1);
+        QPushButton *resetHome = m_resetHomeButton;
         general->addLayout(homeRow);
+        QHBoxLayout *logRow = new QHBoxLayout();
+        QPushButton *clearLogs = makeButton(logRow, fBtn, "Очистить журнал", rowH, 1);
+        general->addLayout(logRow);
         rows->addWidget(m_generalBlock);
-        connect(resetHome, &QPushButton::clicked, [this]() {
-            if (resetHomeFolder(u8(KOBROWSE_HOME))) showMessage(u8("Домашняя папка сброшена"));
-            else showMessage(u8("Не удалось сбросить домашнюю папку"));
+        connect(resetHome, &QPushButton::clicked, [this, resetHome]() {
+            m_resetHomeDraft = !m_resetHomeDraft;
+            setButtonFace(resetHome, I_NONE, m_resetHomeDraft ? u8("Сброс домашней: да") : u8("Сбросить домашнюю папку"));
         });
-        connect(open, &QPushButton::clicked, [this]() { showSettings(false); openTrash(); });
-        connect(empty, &QPushButton::clicked, [this]() { showSettings(false); requestDeletion(2); });
+        connect(clearLogs, &QPushButton::clicked, [this]() {
+            m_pendingDelete = 3;
+            m_confirmText->setText(u8("Очистить журнал Kobrowse? Это действие нельзя отменить."));
+            m_confirm->show();
+        });
+        connect(open, &QPushButton::clicked, [this]() { leaveSettingsForTrash(false); });
+        connect(empty, &QPushButton::clicked, [this]() { leaveSettingsForTrash(true); });
         int trashIndex = -1;
         for (int i = 0; i < SET_COUNT; ++i) {
             m_setLabels << static_cast<QLabel *>(nullptr);
@@ -3464,27 +3547,30 @@ private:
         v->addLayout(bottom);
         connect(bSave, &QPushButton::clicked, [this]() { saveSettings(); });
         connect(bDef, &QPushButton::clicked, [this]() {
-            for (int i = 0; i < SET_COUNT; ++i) m_setVals[i] = cfgDefault(u8(SET_ITEMS[i].key));
-            refreshSettings();
+            m_pendingDelete = 4;
+            m_confirmText->setText(u8("Вернуть все настройки по умолчанию? Изменения применятся после сохранения."));
+            m_confirm->show();
         });
         connect(bCanc, &QPushButton::clicked, [this]() { showSettings(false); });
         m_settings->hide();
         m_fonts << QString() << QFontDatabase().families();
     }
 
-    void setSettingsTab(bool fonts) {
-        m_generalBlock->setVisible(!fonts);
+    void setSettingsTab(int tab) {
+        m_generalBlock->setVisible(tab == 0);
         for (int i = 0; i < SET_COUNT; ++i) {
-            m_settingRows[i]->setVisible(isFontSetting(i) == fonts);
-            m_settingLines[i]->setVisible(isFontSetting(i) == fonts);
+            m_settingRows[i]->setVisible(settingsTab(i) == tab);
+            m_settingLines[i]->setVisible(settingsTab(i) == tab);
         }
-        m_generalTab->setEnabled(fonts); m_fontTab->setEnabled(!fonts);
-        m_generalTab->update(); m_fontTab->update();
+        m_generalTab->setEnabled(tab != 0); m_viewTab->setEnabled(tab != 1); m_fontTab->setEnabled(tab != 2);
+        m_generalTab->update(); m_viewTab->update(); m_fontTab->update();
         m_settingsScroll->verticalScrollBar()->setValue(0);
     }
 
     void showSettings(bool on) {
         if (on) {
+            m_resetHomeDraft = false;
+            setButtonFace(m_resetHomeButton, I_NONE, u8("Сбросить домашнюю папку"));
             QSettings st(u8(KOBROWSE_INI), QSettings::IniFormat);
             st.setIniCodec(QTextCodec::codecForName("UTF-8"));
             m_setVals.clear();
@@ -3502,6 +3588,7 @@ private:
                 }
                 m_setVals << v;
             }
+            m_initialSetVals = m_setVals;
             refreshSettings();
             setSettingsTab(false);
         }
@@ -3509,7 +3596,7 @@ private:
         m_pathLabel->setVisible(!on);
         m_nav->setVisible(!on);
         m_toolbar->setVisible(!on);
-        m_headerLine->setVisible(!on); m_pathLine->setVisible(!on); m_footerLine->setVisible(!on);
+        m_footerLine->setVisible(!on);
         m_info->hide();
         m_msg->hide();
         m_settings->setVisible(on);
@@ -3595,6 +3682,9 @@ private:
         QStringList keys;
         for (int i = 0; i < SET_COUNT; ++i) keys << u8(SET_ITEMS[i].key);
         if (!saveConfig(keys, m_setVals)) { showMessage(u8("Не удалось записать kobrowse.ini")); return; }
+        if (m_resetHomeDraft && !resetHomeFolder(u8(KOBROWSE_HOME))) {
+            showMessage(u8("Настройки сохранены, но домашнюю папку сбросить не удалось")); return;
+        }
         klog(u8("settings saved"));
         close();
         if (g_reopen) g_reopen->start();
@@ -3614,7 +3704,7 @@ private:
     std::vector<int> m_pageStarts;
     int m_pageIndex = 0;
     RowDelegate *m_fileDelegate = nullptr;
-    QFrame *m_headerLine = nullptr, *m_pathLine = nullptr, *m_footerLine = nullptr;
+    QFrame *m_footerLine = nullptr;
     bool          m_showHidden;
     bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
@@ -3642,7 +3732,7 @@ private:
     QWidget      *m_settings = nullptr, *m_nav = nullptr, *m_toolbar = nullptr; // экран настроек; ряд навигации
     QList<QLabel *> m_setLabels;        // значения на экране настроек
     QList<QPushButton *> m_stepBtns;    // кнопки «−»/«+» по строкам: 0,1 — строка 0; 2,3 — строка 1 …
-    QStringList   m_setVals;            // редактируемые значения (как в kobrowse.ini)
+    QStringList   m_setVals, m_initialSetVals; // черновик и значения при открытии
     QStringList   m_fonts;              // гарнитуры для выбора
     QTreeWidget  *m_actions = nullptr;
     QWidget      *m_confirm = nullptr;
@@ -3653,7 +3743,9 @@ private:
     int m_fileCount = 0, m_dirCount = 0;
     QScrollArea *m_settingsScroll = nullptr;
     QWidget *m_generalBlock = nullptr;
-    QPushButton *m_generalTab = nullptr, *m_fontTab = nullptr;
+    QPushButton *m_generalTab = nullptr, *m_viewTab = nullptr, *m_fontTab = nullptr;
+    QPushButton *m_resetHomeButton = nullptr;
+    bool m_resetHomeDraft = false;
     QVector<QWidget *> m_settingRows, m_settingLines;
     QVector<SettingSwitch *> m_switches;
     bool m_settingsTouch = false;
@@ -3880,6 +3972,28 @@ static void checkKobrowseTriggers() {
     }
 }
 
+// Delay removal until NickelHook has restored its .failsafe library. Never
+// treat an unavailable onboard directory as the user's uninstall request.
+static QTimer *g_uninstallTimer = nullptr;
+static void checkUninstallRequest() {
+    const QString root = u8(KOBROWSE_ROOT);
+    const QString plugin = u8("/usr/local/Kobo/imageformats/libkobrowse.so");
+    struct stat onboard, parent;
+    if (::stat(QFile::encodeName(root).constData(), &onboard) != 0
+        || ::stat("/mnt", &parent) != 0 || onboard.st_dev == parent.st_dev
+        || !uninstallRequested(root)) return;
+    if (QFileInfo(plugin + u8(".failsafe")).exists() || !QFileInfo(plugin).exists()) return;
+    g_uninstallTimer->stop();
+    QString error;
+    if (!cleanupAppInstall(root, plugin, error)) {
+        nh_log("uninstall failed: %s", QFile::encodeName(error).constData());
+        nh_dump_log();
+    } else {
+        ::sync();
+        nh_log("uninstall complete; application data moved to trash");
+    }
+}
+
 // Вызывается один раз при загрузке плагина в Nickel
 static int kobrowse_init() {
     QFile::remove(u8(KOBROWSE_TRIGGER)); // убрать старый сигнал, если остался
@@ -3888,6 +4002,14 @@ static int kobrowse_init() {
     QFile::remove(u8(KOBROWSE_DIAG));
     if (!QCoreApplication::instance()) {
         nh_log("no QApplication at init, trigger disabled");
+        return 0;
+    }
+    if (uninstallRequested(u8(KOBROWSE_ROOT))) {
+        g_uninstallTimer = new QTimer(QCoreApplication::instance());
+        g_uninstallTimer->setInterval(15000);
+        QObject::connect(g_uninstallTimer, &QTimer::timeout, []() { checkUninstallRequest(); });
+        g_uninstallTimer->start();
+        nh_log("uninstall requested; waiting for library failsafe");
         return 0;
     }
     g_lifecycleClose = new QTimer();
@@ -3916,20 +4038,13 @@ static int kobrowse_init() {
     return 0;
 }
 
-// Явное удаление по флагу: данные приложения и его пункт NickelMenu.
-// Корзина пользователей хранится отдельно и не удаляется.
-static bool kobrowse_uninstall() {
-    const bool ok = cleanupAppInstall(u8(KOBROWSE_ROOT));
-    if (!ok) nh_log("uninstall cleanup failed; manual cleanup may be required");
-    return ok;
-}
-
-// Описание плагина; файл uninstall_flag на ридере удаляет плагин при загрузке.
+// Удаление инициируется отсутствием установленного маркера в kobrowse_init.
+// NickelHook xflag не используется: он удаляет библиотеку до проверки данных.
 // failsafe: если Nickel упадёт в первые 10 с после старта, плагин отключится сам.
 static struct nh_info kobrowse_info = {
     .name           = "kobrowse",
     .desc           = "File manager for Kobo",
-    .uninstall_flag = "/mnt/onboard/.adds/kobrowse/uninstall",
+    .uninstall_flag = nullptr,
     .uninstall_xflag = nullptr,
     .failsafe_delay = 10,
 };
@@ -3948,5 +4063,5 @@ NickelHook(
     .info  = &kobrowse_info,
     .hook  = kobrowse_hook,
     .dlsym = kobrowse_dlsym,
-    .uninstall = &kobrowse_uninstall,
+    .uninstall = nullptr,
 )

@@ -8,6 +8,7 @@ override LDFLAGS  += -lz
 override CXXFLAGS += -Wall -Wextra -Wno-missing-field-initializers
 override SKIPCONFIGURE += package
 override KOBOROOT += res/nm_kobrowse:/mnt/onboard/.adds/nm/kobrowse
+override KOBOROOT += res/uninstall_marker:/mnt/onboard/.adds/kobrowse/uninstall
 
 include NickelHook/NickelHook.mk
 

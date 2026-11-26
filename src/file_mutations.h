@@ -2,6 +2,7 @@
 #define KOBROWSE_FILE_MUTATIONS_H
 #include "file_policy.h"
 #include <QTemporaryDir>
+#include <QDateTime>
 #include <cerrno>
 
 // Remove the entry itself, never the target of a symbolic link. Callers choose
@@ -53,14 +54,53 @@ inline bool moveLocalEntry(const QString &root, const QString &source, const QSt
     return true;
 }
 
-inline bool cleanupAppInstall(const QString &root) {
+// Missing marker only requests removal if the app directory is actually present.
+// An unavailable onboard mount or a symlink is not a request to uninstall.
+inline bool uninstallRequested(const QString &root) {
+    const QString app = root + QLatin1String("/.adds/kobrowse");
+    const QString marker = app + QLatin1String("/uninstall");
+    if (!safeLocalPath(root, app) || !QFileInfo(app).isDir()) return false;
+    struct stat info;
+    errno = 0;
+    return ::lstat(QFile::encodeName(marker).constData(), &info) != 0 && errno == ENOENT;
+}
+
+// Preserve the complete app data directory, not just known settings and logs.
+// Caller waits until NickelHook's failsafe has restored the plugin filename.
+// The plugin path is supplied by the caller so tests can use a fake file.
+inline bool cleanupAppInstall(const QString &root, const QString &plugin, QString &error) {
     const QString app = root + QLatin1String("/.adds/kobrowse");
     const QString menu = root + QLatin1String("/.adds/nm/kobrowse");
-    bool ok = true;
-    const QFileInfo appInfo(app), menuInfo(menu);
-    if ((appInfo.exists() || appInfo.isSymLink()) && !removeTreeNoFollow(root, app)) ok = false;
-    if ((menuInfo.exists() || menuInfo.isSymLink()) && !removeTreeNoFollow(root, menu)) ok = false;
-    return ok;
+    const QString trash = root + QLatin1String("/.kobrowse_trash");
+    if (!uninstallRequested(root) || !safeLocalPath(root, trash, true)
+        || (!QFileInfo(trash).exists() && !QDir().mkdir(trash))
+        || !safeLocalPath(root, trash) || !QFileInfo(trash).isDir()) {
+        error = QString::fromUtf8("Каталог приложения или корзина недоступны"); return false;
+    }
+    const QFileInfo pluginInfo(plugin);
+    if (!pluginInfo.exists() || !pluginInfo.isFile() || pluginInfo.isSymLink()) {
+        error = QString::fromUtf8("Библиотека приложения недоступна"); return false;
+    }
+    const QString prefix = trash + QLatin1String("/kobrowse-uninstall-")
+        + QDateTime::currentDateTime().toString(QLatin1String("yyyyMMdd-hhmmss"));
+    QString backup = prefix;
+    for (int n = 1; QFileInfo(backup).exists() || QFileInfo(backup).isSymLink(); ++n)
+        backup = prefix + QLatin1Char('-') + QString::number(n);
+    if (!uninstallRequested(root) || !safeLocalPath(root, backup, true) || !QDir().rename(app, backup)) {
+        error = QString::fromUtf8("Не удалось сохранить настройки и журнал в корзине"); return false;
+    }
+    if (!QFile::remove(plugin)) {
+        error = QString::fromUtf8("Не удалось удалить библиотеку");
+        if (!safeLocalPath(root, app, true) || !QDir().rename(backup, app))
+            error += QString::fromUtf8("; данные остались в корзине: ") + backup;
+        return false;
+    }
+    const QFileInfo menuInfo(menu);
+    if ((menuInfo.exists() || menuInfo.isSymLink()) && !removeTreeNoFollow(root, menu)) {
+        error = QString::fromUtf8("Библиотека удалена, пункт меню остался; данные в корзине: ") + backup;
+        return false;
+    }
+    return true;
 }
 
 // Copy into an isolated sibling directory; publish the completed entry only.

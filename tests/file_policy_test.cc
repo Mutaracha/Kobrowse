@@ -2,6 +2,7 @@
 #include "../src/file_mutations.h"
 #include "../src/pagination.h"
 #include "../src/home_folder.h"
+#include "../src/file_kind.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QTemporaryDir>
@@ -28,6 +29,10 @@ static bool contains(const QFileInfoList &entries, const QString &name) {
 }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    require(fileKind("Книга.KEPUB.EPUB") == FileBook && fileKind("read.PDF") == FileBook, "book icons");
+    require(fileKind("picture.TIFF") == FileImage && fileKind("photo.JPEG") == FileImage, "image icons");
+    require(fileKind("book.fb2.zip") == FileArchive && fileKind("comic.CBR") == FileArchive, "archive icons");
+    require(fileKind("file.zip.txt") == FileBook && fileKind("folder-epub") == FileGeneric, "file extension boundaries");
     PageState p = pageState(0, 0, 100);
     require(p.current == 1 && p.total == 1 && !p.previous && !p.next, "single page");
     p = pageState(0, 220, 100);
@@ -213,8 +218,19 @@ int main(int argc, char **argv) {
     writeFile(root + "/outside.txt", "retain");
     require(::symlink((root + "/outside.txt").toLocal8Bit().constData(),
                       (root + "/.adds/kobrowse/sub/link").toLocal8Bit().constData()) == 0, "cleanup symlink");
-    require(cleanupAppInstall(root), "uninstall cleanup");
-    require(!QFileInfo(root + "/.adds/kobrowse").exists(), "app data removed");
+    const QString marker = root + "/.adds/kobrowse/uninstall";
+    const QString plugin = root + "/plugin.so";
+    writeFile(marker, "marker");
+    writeFile(plugin, "plugin");
+    QString uninstallError;
+    require(!uninstallRequested(root) && !cleanupAppInstall(root, plugin, uninstallError), "marker prevents removal");
+    require(QFile::remove(marker) && uninstallRequested(root), "marker removal requests uninstall");
+    require(!cleanupAppInstall(root, root + "/missing.so", uninstallError), "missing plugin aborts uninstall");
+    require(QFileInfo(root + "/.adds/kobrowse/.ini").exists(), "failure preserves data");
+    require(cleanupAppInstall(root, plugin, uninstallError), "uninstall cleanup");
+    require(!QFileInfo(plugin).exists() && !QFileInfo(root + "/.adds/kobrowse").exists(), "plugin removed and app data moved");
+    const QStringList backups = QDir(trash).entryList(QStringList() << "kobrowse-uninstall-*", QDir::Dirs | QDir::NoDotAndDotDot);
+    require(backups.size() == 1 && QFileInfo(trash + "/" + backups.first() + "/.ini").exists(), "config preserved in trash");
     require(!QFileInfo(root + "/.adds/nm/kobrowse").exists(), "app menu removed");
     require(QFileInfo(root + "/.adds/nm/other").exists() && QFileInfo(root + "/outside.txt").exists(),
             "other data and link target retained");

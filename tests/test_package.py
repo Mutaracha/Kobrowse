@@ -45,19 +45,24 @@ class PackageTest(unittest.TestCase):
     def test_rejects_invalid_members_and_content(self):
         plugin = './usr/local/Kobo/imageformats/libkobrowse.so'
         menu = './mnt/onboard/.adds/nm/kobrowse'
-        cases = ('extra', 'fat_fixture', 'missing', 'duplicate', 'symlink', 'mode', 'owner',
+        marker = './mnt/onboard/.adds/kobrowse/uninstall'
+        cases = ('extra', 'fat_fixture', 'missing', 'missing_marker', 'empty_marker', 'duplicate', 'symlink', 'mode', 'owner',
                  'wrong_binary', 'wrong_arch', 'wrong_menu')
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 path = pathlib.Path(tmp) / 'bad.tgz'
                 with tarfile.open(path, 'w:gz') as archive:
-                    files = [(plugin, ARM_SO), (menu, b'touch /tmp/kobrowse.open')]
+                    files = [(plugin, ARM_SO), (menu, b'touch /tmp/kobrowse.open'), (marker, b'remove to uninstall')]
                     if case == 'extra':
                         files.append(('./unexpected', b'x'))
                     elif case == 'fat_fixture':
                         files.append(('./build/fat-test/fixture.img', b'fixture'))
                     elif case == 'missing':
+                        files.pop(1)
+                    elif case == 'missing_marker':
                         files.pop()
+                    elif case == 'empty_marker':
+                        files[2] = (marker, b'')
                     elif case == 'duplicate':
                         files.append((menu[2:], b'touch /tmp/kobrowse.open'))
                     elif case == 'wrong_binary':

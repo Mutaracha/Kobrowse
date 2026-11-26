@@ -6,6 +6,7 @@ import tarfile
 EXPECTED = {
     'usr/local/Kobo/imageformats/libkobrowse.so',
     'mnt/onboard/.adds/nm/kobrowse',
+    'mnt/onboard/.adds/kobrowse/uninstall',
 }
 
 
@@ -25,8 +26,11 @@ def check(path):
                 if (len(data) < 20 or data[:6] != b'\x7fELF\x01\x01'
                         or data[16:20] != b'\x03\x00\x28\x00'):
                     raise ValueError('plugin is not an ARM ELF32 shared object')
-            elif b'touch /tmp/kobrowse.open' not in data:
-                raise ValueError('missing NickelMenu entry')
+            elif name.endswith('/nm/kobrowse'):
+                if b'touch /tmp/kobrowse.open' not in data:
+                    raise ValueError('missing NickelMenu entry')
+            elif not data:
+                raise ValueError('empty uninstall marker')
 
 
 if __name__ == '__main__':

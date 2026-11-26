@@ -6,6 +6,8 @@
 #include <QScrollBar>
 #include <QEvent>
 #include <QTextStream>
+#include <QPushButton>
+#include <QImage>
 #include <cstdlib>
 
 class PaintCounter : public QObject {
@@ -35,6 +37,20 @@ int main(int argc, char **argv) {
             << ActionMenuEntry(QString::fromUtf8("Закрыть"), 7, 60);
     require(syncActionMenu(&menu, actions), "initial menu build");
     require(menu.topLevelItemCount() == 3 && !(menu.topLevelItem(1)->flags() & Qt::ItemIsEnabled), "menu separator disabled");
+    ActionMenuDelegate delegate;
+    QImage separator(100, 9, QImage::Format_RGB32); separator.fill(Qt::white);
+    QPainter painter(&separator);
+    QStyleOptionViewItem separatorOption; separatorOption.rect = separator.rect();
+    delegate.paint(&painter, separatorOption, menu.model()->index(1, 0)); painter.end();
+    require(QColor::fromRgb(separator.pixel(50, 4)) == QColor(80, 80, 80)
+            && QColor::fromRgb(separator.pixel(50, 3)) == QColor(Qt::white)
+            && QColor::fromRgb(separator.pixel(50, 5)) == QColor(Qt::white), "single dark separator");
+    QWidget footer; footer.resize(200, 60);
+    QPushButton button(&footer); button.setGeometry(0, 0, 60, 60);
+    footer.show(); app.processEvents();
+    require(emptyFooterTap(&footer, QPoint(150, 30)), "empty footer closes menu");
+    require(!emptyFooterTap(&footer, QPoint(30, 30)), "footer button remains interactive");
+    require(!emptyFooterTap(&footer, QPoint(220, 30)), "outside footer ignored");
     menu.resize(300, 250); menu.show();
     PaintCounter paints; menu.viewport()->installEventFilter(&paints);
     app.processEvents(); app.processEvents();
