@@ -1,5 +1,4 @@
-# NickelHook is a pinned upstream submodule. Keep project packaging separate
-# from its stock koboroot rule, which writes KoboRoot.tgz in the checkout.
+# NickelHook is a pinned upstream submodule. Project packaging uses build/.
 include NickelHook/NickelHook.mk
 
 override LIBRARY  := libkobrowse.so
@@ -13,6 +12,7 @@ include NickelHook/NickelHook.mk
 
 # Run after a fresh build. User configuration is not included.
 package:
-	tar cvzf kobrowse_KoboRoot.tgz --show-transformed --owner=0 --group=0 --numeric-owner --mode=0644 $(foreach file,$(KOBOROOT),--transform="s,$(word 1,$(subst :, ,$(file))),.$(word 2,$(subst :, ,$(file))),") $(foreach file,$(KOBOROOT),$(word 1,$(subst :, ,$(file))))
+	mkdir -p build
+	tar cvzf build/KoboRoot.tgz --show-transformed --owner=0 --group=0 --numeric-owner --mode=0644 $(foreach file,$(KOBOROOT),--transform="s,$(word 1,$(subst :, ,$(file))),.$(word 2,$(subst :, ,$(file))),") $(foreach file,$(KOBOROOT),$(word 1,$(subst :, ,$(file))))
 
 .PHONY: package

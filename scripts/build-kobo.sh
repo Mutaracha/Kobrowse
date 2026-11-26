@@ -11,4 +11,4 @@ if [[ ! -f NickelHook/NickelHook.mk ]]; then
 fi
 "$engine" run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
     -v "$root:/work" -w /work --entrypoint bash "$image" -euc 'make -B all && make package'
-python3 scripts/check-package.py kobrowse_KoboRoot.tgz
+python3 scripts/check-package.py build/KoboRoot.tgz

@@ -58,6 +58,8 @@
 
 #include <NickelHook.h>
 
+#include "file_policy.h"
+
 // ---------- настройки ----------
 static const char *KOBROWSE_ROOT    = "/mnt/onboard";   // выше этой папки не поднимаемся
 static const char *KOBROWSE_TRIGGER = "/tmp/kobrowse.open"; // файл-сигнал от NickelMenu
@@ -241,7 +243,8 @@ static QString uniqueName(const QString &dir, const QString &name, bool isDir) {
 // в конце — при сбое не остаётся «наполовину скопированной» книги под настоящим именем.
 static bool copyRecursive(const QString &src, const QString &dst, QString &err) {
     const QFileInfo fi(src);
-    if (fi.isDir() && !fi.isSymLink()) {
+    if (fi.isSymLink()) { err = u8("Символические ссылки нельзя копировать"); return false; }
+    if (fi.isDir()) {
         if (!QDir().mkpath(dst)) { err = u8("Не создать папку ") + QFileInfo(dst).fileName(); return false; }
         const QFileInfoList kids = QDir(src).entryInfoList(
             QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
@@ -2078,6 +2081,7 @@ private:
     void openResult(QTreeWidgetItem *it) {
         const int row = m_list->indexOfTopLevelItem(it);
         if (row < 0 || row >= m_paths.size()) return;
+        if (!safeLocalPath(u8(KOBROWSE_ROOT), m_paths.at(row))) { showMsg(u8("Ссылка недоступна")); return; }
         hide();
         QString err;
         if (openBook(m_paths.at(row), true, err)) close();
@@ -2665,12 +2669,8 @@ private:
         m_msgTimer.start();
     }
 
-    // Защищённые пути: служебные данные Nickel и сама корзина — не переносим и не удаляем
-    bool isProtected(const QString &path) const {
-        const QString kobo = m_root + u8("/.kobo");
-        return path == m_root || path == kobo || path.startsWith(kobo + u8("/"))
-            || path == m_root + u8("/.adds") || path == m_trash;
-    }
+    // Служебные каталоги видимы, но изменения в них запрещены.
+    bool isProtected(const QString &path) const { return protectedLocalPath(m_root, path); }
 
     // Отметка строки: флаг для MarkDelegate (он рисует инверсию)
     void setMarkedLook(QTreeWidgetItem *it, bool on) {
@@ -2683,7 +2683,9 @@ private:
         if (m_marked.size() != 1) return;
         const QFileInfo fi(*m_marked.begin());
         QString t = fi.fileName() + u8("\n\n");
-        if (fi.isDir()) {
+        if (fi.isSymLink()) {
+            t += u8("Символическая ссылка: ") + fi.symLinkTarget() + u8("\n");
+        } else if (fi.isDir()) {
             const int n = QDir(fi.absoluteFilePath()).entryList(
                 QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System).size();
             t += u8("Папка, элементов: %1\n").arg(n);
@@ -2730,65 +2732,77 @@ private:
     void toClipboard(bool cut) {
         QStringList list;
         for (const QString &p : m_marked) {
-            if (cut && isProtected(p)) continue;
+            if (!safeLocalPath(m_root, p) || (cut && isProtected(p))) continue;
             list << p;
         }
-        if (cut && list.size() < m_marked.size()) showMessage(u8("Служебные файлы Kobo не перемещаются"));
+        const bool skipped = list.size() < m_marked.size();
         m_clip = list;
         m_clipCut = cut;
         m_marked.clear();
         load();
+        if (skipped) showMessage(u8("Ссылки и защищённые пути пропущены"));
     }
 
     // Вставить буфер в текущую папку
     void paste() {
-        if (isProtected(m_path) && m_path != m_root) { showMessage(u8("Сюда вставлять нельзя")); return; }
+        if (!safeLocalPath(m_root, m_path) || (isProtected(m_path) && m_path != m_root)) {
+            showMessage(u8("Сюда вставлять нельзя")); return;
+        }
         QString err;
+        QStringList remaining;
         int done = 0;
         for (const QString &src : m_clip) {
             const QFileInfo fi(src);
-            if (!fi.exists()) continue;
-            const bool isDir = fi.isDir() && !fi.isSymLink();
-            // Нельзя вставить папку в саму себя или в её подпапку
-            if (isDir && (m_path == src || m_path.startsWith(src + u8("/")))) {
-                err = u8("Папку нельзя вставить в саму себя");
-                continue;
+            if (!safeLocalPath(m_root, src) || (m_clipCut && isProtected(src))) {
+                err = u8("Недоступный или защищённый путь: ") + fi.fileName();
+                remaining << src; continue;
             }
-            // Перемещение в ту же папку — ничего не делаем
+            const bool isDir = fi.isDir();
+            if (isDir && pathWithin(m_path, src)) {
+                err = u8("Папку нельзя вставить в саму себя");
+                remaining << src; continue;
+            }
             if (m_clipCut && fi.absolutePath() == m_path) { ++done; continue; }
+            if (!m_clipCut && !safeCopyTree(m_root, src)) {
+                err = u8("Не удалось копировать: ссылка или недоступный файл в ") + fi.fileName();
+                remaining << src; continue;
+            }
             const QString dst = uniqueName(m_path, fi.fileName(), isDir);
             bool ok;
             if (m_clipCut) {
-                ok = QDir().rename(src, dst); // одна ФС (/mnt/onboard) — мгновенно
+                ok = QDir().rename(src, dst);
                 if (!ok) err = u8("Не удалось переместить ") + fi.fileName();
             } else {
                 ok = copyRecursive(src, dst, err);
             }
-            if (ok) ++done;
+            if (ok) ++done; else remaining << src;
         }
-        ::sync(); // сбросить записанное на накопитель
-        if (m_clipCut) m_clip.clear(); // после переноса буфер пуст; копию можно вставлять ещё раз
-        if (!err.isEmpty()) showMessage(err);
+        ::sync();
+        if (m_clipCut) m_clip = remaining;
         klog(u8("paste %1 item(s) to %2").arg(done).arg(m_path));
         load();
+        if (!err.isEmpty()) showMessage(err);
     }
 
     // В корзину: перенос в /mnt/onboard/.kobrowse_trash с датой в начале имени
     void moveToTrash() {
-        QDir().mkpath(m_trash);
+        if (!safeLocalPath(m_root, m_trash, true) || !QDir().mkpath(m_trash)
+            || !safeLocalPath(m_root, m_trash)) {
+            showMessage(u8("Корзина недоступна")); return;
+        }
         const QString stamp = QDateTime::currentDateTime().toString(u8("yyyyMMdd-hhmmss_"));
-        int skipped = 0;
+        QSet<QString> remaining;
         for (const QString &src : m_marked) {
-            if (isProtected(src)) { ++skipped; continue; }
+            if (isProtected(src) || !safeLocalPath(m_root, src)) { remaining.insert(src); continue; }
             const QFileInfo fi(src);
             const QString dst = uniqueName(m_trash, stamp + fi.fileName(), fi.isDir());
-            if (!QDir().rename(src, dst)) ++skipped;
-            m_clip.removeAll(src);
+            if (!QDir().rename(src, dst)) remaining.insert(src);
+            else m_clip.removeAll(src);
         }
         ::sync();
-        if (skipped) showMessage(u8("Не перенесено в корзину: %1").arg(skipped));
-        m_marked.clear();
+        m_marked = remaining;
         load();
+        if (!remaining.isEmpty()) showMessage(u8("Не перенесено в корзину: %1").arg(remaining.size()));
     }
 
     // Прочитать текущую папку и заполнить список
@@ -2806,12 +2820,10 @@ private:
             return;
         }
 
-        QDir::Filters flt = QDir::AllEntries | QDir::NoDotAndDotDot | QDir::System;
-        if (m_showHidden) flt |= QDir::Hidden;
         // Папки сверху, по имени без учёта регистра; список читается разом,
         // дескрипторы на /mnt/onboard не удерживаются (важно для USB-режима)
         const QFileInfoList entries =
-            dir.entryInfoList(flt, QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+            browserEntries(dir, m_showHidden);
 
         if (m_path != m_root) {
             QTreeWidgetItem *parent = new QTreeWidgetItem(m_list);
@@ -2843,6 +2855,7 @@ private:
         if (it->data(0, ROLE_PARENT).toBool()) { goUp(); return; }
         const QString path = it->data(0, ROLE_PATH).toString();
         if (path.isEmpty()) return;
+        if (!safeLocalPath(m_root, path)) { showMessage(u8("Ссылка или путь вне накопителя недоступен")); return; }
         if (it->data(0, ROLE_DIR).toBool()) {
             m_path = path;
             m_marked.clear();
@@ -2868,9 +2881,19 @@ private:
         m_unzip->hide();
         const QFileInfo zi(zip);
         const QString dir = zi.absolutePath();
+        if (!safeLocalPath(m_root, zip) || !safeLocalPath(m_root, dir) || isProtected(dir)) {
+            showMessage(u8("Распаковка здесь запрещена")); return;
+        }
+        if (trashZip && (!safeLocalPath(m_root, m_trash, true) || !QDir().mkpath(m_trash)
+                         || !safeLocalPath(m_root, m_trash))) {
+            showMessage(u8("Корзина недоступна")); return;
+        }
         const QString tmp = dir + u8("/.kobrowse_unzip_")
                           + QDateTime::currentDateTime().toString(u8("yyyyMMdd-hhmmss"));
-        QDir().mkpath(tmp);
+        if (!safeLocalPath(m_root, tmp, true) || QFileInfo(tmp).exists()
+            || !QDir().mkdir(tmp) || !safeLocalPath(m_root, tmp)) {
+            showMessage(u8("Не удалось создать временную папку")); return;
+        }
         QProcess pr;
         pr.start(u8("/usr/bin/unzip"), QStringList() << u8("-o") << u8("-q") << zip << u8("-d") << tmp);
         const bool ok = pr.waitForFinished(180000) && pr.exitStatus() == QProcess::NormalExit

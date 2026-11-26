@@ -1,4 +1,4 @@
-name: Kobo test package
+name: Kobrowse test build
 
 on:
   push:
@@ -17,6 +17,10 @@ jobs:
         with:
           persist-credentials: false
           submodules: true
+      - name: Install Qt 5 for filesystem tests
+        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config
+      - name: Test filesystem policies
+        run: bash tests/run-file-policy-tests.sh
       - name: Test package checks
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify Qt 5 test package
@@ -24,5 +28,5 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: kobrowse-kobo-qt5-test
-          path: kobrowse_KoboRoot.tgz
+          path: build/KoboRoot.tgz
           if-no-files-found: error

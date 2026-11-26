@@ -25,8 +25,10 @@ class PackageTest(unittest.TestCase):
             shutil.copytree(ROOT / 'res', root / 'res')
             (root / 'libkobrowse.so').write_bytes(ARM_SO)
             (root / 'libkobrowse.so').chmod(0o755)
+            (root / 'KoboRoot.tgz').write_bytes(b'existing update')
             subprocess.run(['make', 'package'], cwd=root, check=True, stdout=subprocess.PIPE)
-            checker.check(root / 'kobrowse_KoboRoot.tgz')
+            self.assertEqual((root / 'KoboRoot.tgz').read_bytes(), b'existing update')
+            checker.check(root / 'build/KoboRoot.tgz')
 
     def test_runtime_names_match_package(self):
         source = (ROOT / 'src/kobrowse.cc').read_text(encoding='utf-8')

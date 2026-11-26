@@ -3,6 +3,6 @@
 *.moc
 *.moc.o
 libkobrowse.so
-kobrowse_KoboRoot.tgz
+/build/
 compile_commands.json
 __pycache__/
