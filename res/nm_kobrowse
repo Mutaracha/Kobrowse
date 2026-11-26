@@ -1,2 +1,2 @@
-menu_item:main:Файлы:cmd_spawn:quiet:touch /tmp/kofm.open
+menu_item:main:Файлы:cmd_spawn:quiet:touch /tmp/kobrowse.open
 menu_item:main:Обновить библиотеку:nickel_misc:rescan_books_full

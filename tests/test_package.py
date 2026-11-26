@@ -23,18 +23,30 @@ class PackageTest(unittest.TestCase):
             shutil.copy(ROOT / 'Makefile', root)
             shutil.copytree(ROOT / 'NickelHook', root / 'NickelHook')
             shutil.copytree(ROOT / 'res', root / 'res')
-            (root / 'libkofm.so').write_bytes(ARM_SO)
-            (root / 'libkofm.so').chmod(0o755)
+            (root / 'libkobrowse.so').write_bytes(ARM_SO)
+            (root / 'libkobrowse.so').chmod(0o755)
             subprocess.run(['make', 'package'], cwd=root, check=True, stdout=subprocess.PIPE)
-            checker.check(root / 'kofm_KoboRoot.tgz')
+            checker.check(root / 'kobrowse_KoboRoot.tgz')
+
+    def test_runtime_names_match_package(self):
+        source = (ROOT / 'src/kobrowse.cc').read_text(encoding='utf-8')
+        menu = (ROOT / 'res/nm_kobrowse').read_text(encoding='utf-8')
+        makefile = (ROOT / 'Makefile').read_text(encoding='utf-8')
+        for expected in ('/tmp/kobrowse.open', '/mnt/onboard/.adds/kobrowse/kobrowse.ini',
+                         '/mnt/onboard/.kobrowse_trash', '[kobrowse]',
+                         'kobrowse/open_books', '.name           = "kobrowse"'):
+            self.assertIn(expected, source)
+        self.assertIn('touch /tmp/kobrowse.open', menu)
+        self.assertIn('LIBRARY  := libkobrowse.so', makefile)
+        self.assertIn('res/nm_kobrowse:/mnt/onboard/.adds/nm/kobrowse', makefile)
 
     def test_rejects_extra_files_and_wrong_binary(self):
         for extra, binary in [(True, ARM_SO), (False, b'wrong')]:
             with self.subTest(extra=extra), tempfile.TemporaryDirectory() as tmp:
                 path = pathlib.Path(tmp) / 'bad.tgz'
                 with tarfile.open(path, 'w:gz') as archive:
-                    files = {'./usr/local/Kobo/imageformats/libkofm.so': binary,
-                             './mnt/onboard/.adds/nm/kofm': b'touch /tmp/kofm.open'}
+                    files = {'./usr/local/Kobo/imageformats/libkobrowse.so': binary,
+                             './mnt/onboard/.adds/nm/kobrowse': b'touch /tmp/kobrowse.open'}
                     if extra:
                         files['./unexpected'] = b'x'
                     for name, data in files.items():

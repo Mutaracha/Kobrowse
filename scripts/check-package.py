@@ -4,8 +4,8 @@ import sys
 import tarfile
 
 EXPECTED = {
-    'usr/local/Kobo/imageformats/libkofm.so',
-    'mnt/onboard/.adds/nm/kofm',
+    'usr/local/Kobo/imageformats/libkobrowse.so',
+    'mnt/onboard/.adds/nm/kobrowse',
 }
 
 
@@ -20,12 +20,12 @@ def check(path):
                 raise ValueError('invalid type, ownership or mode: ' + member.name)
             data = archive.extractfile(member).read()
             name = member.name.removeprefix('./')
-            if name.endswith('libkofm.so'):
+            if name.endswith('libkobrowse.so'):
                 # ELF32, little-endian, ARM, shared object.
                 if (len(data) < 20 or data[:6] != b'\x7fELF\x01\x01'
                         or data[16:20] != b'\x03\x00\x28\x00'):
                     raise ValueError('plugin is not an ARM ELF32 shared object')
-            elif b'touch /tmp/kofm.open' not in data:
+            elif b'touch /tmp/kobrowse.open' not in data:
                 raise ValueError('missing NickelMenu entry')
 
 

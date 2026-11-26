@@ -1,6 +1,6 @@
-// kofm — файловый менеджер для Kobo (плагин Nickel на NickelHook)
+// kobrowse — файловый менеджер для Kobo (плагин Nickel на NickelHook)
 // Этапы 1–2: просмотр папок /mnt/onboard, выбор, копирование/перенос/корзина. Окно открывается по файлу-сигналу
-// /tmp/kofm.open, который создаёт пункт NickelMenu.
+// /tmp/kobrowse.open, который создаёт пункт NickelMenu.
 // Ограничения NickelTC: GCC 4.9, Qt 5.2.1, C++11 — без QTimer::singleShot(лямбда).
 
 #include <QApplication>
@@ -59,15 +59,15 @@
 #include <NickelHook.h>
 
 // ---------- настройки ----------
-static const char *KOFM_ROOT    = "/mnt/onboard";   // выше этой папки не поднимаемся
-static const char *KOFM_TRIGGER = "/tmp/kofm.open"; // файл-сигнал от NickelMenu
-static const char *KOFM_DIAG    = "/tmp/kofm.diag"; // сигнал: диагностика шрифтов интерфейса Nickel
+static const char *KOBROWSE_ROOT    = "/mnt/onboard";   // выше этой папки не поднимаемся
+static const char *KOBROWSE_TRIGGER = "/tmp/kobrowse.open"; // файл-сигнал от NickelMenu
+static const char *KOBROWSE_DIAG    = "/tmp/kobrowse.diag"; // сигнал: диагностика шрифтов интерфейса Nickel
 static double SCREEN_DPI = 300;        // плотность экрана; уточняется по устройству в loadConfig (Clara HD — 300)
-static const char *KOFM_INI     = "/mnt/onboard/.adds/kofm/kofm.ini"; // настройки, читаются при каждом открытии
+static const char *KOBROWSE_INI     = "/mnt/onboard/.adds/kobrowse/kobrowse.ini"; // настройки, читаются при каждом открытии
 static const int   LOG_TAPS     = 30;  // отладка: сколько касаний записать в лог
 static const int   SWIPE_PX     = 40;  // сдвиг пальца больше этого — перетаскивание, а не нажатие
-static const char *KOFM_TRASH   = "/mnt/onboard/.kofm_trash"; // корзина (папка с точкой — Nickel её не индексирует)
-static const char *KOFM_LOG     = "/mnt/onboard/.adds/kofm/kofm.log";
+static const char *KOBROWSE_TRASH   = "/mnt/onboard/.kobrowse_trash"; // корзина (папка с точкой — Nickel её не индексирует)
+static const char *KOBROWSE_LOG     = "/mnt/onboard/.adds/kobrowse/kobrowse.log";
 static const int   LOG_EVENTS   = 0;   // сколько событий окна записать в лог (отладка)
 
 // Функции Nickel (libnickel), загружаются при старте плагина
@@ -77,12 +77,12 @@ static QWidget *(*MWC_currentView)(MainWindowController *) = nullptr;
 
 static QString u8(const char *s) { return QString::fromUtf8(s); }
 
-// ---------- внешний вид: значения из kofm.ini (пересчитаны в пиксели) ----------
+// ---------- внешний вид: значения из kobrowse.ini (пересчитаны в пиксели) ----------
 // Заполняются loadConfig() при каждом открытии менеджера.
 static int     LIST_PX, FONT_BTN, FONT_MSG, GAP, BTN_MARGIN, BTN_HEIGHT, ICON_PX, LONG_TAP_MS, IDLE_MS;
 static qreal   BTN_RADIUS, BTN_PEN;
 static QString LIST_FONT, BTN_FONT;
-static int OPDS_KEY_PX, OPDS_FUNC_PX;   // кегли клавиатуры OPDS (из kofm.ini)
+static int OPDS_KEY_PX, OPDS_FUNC_PX;   // кегли клавиатуры OPDS (из kobrowse.ini)
 // Клавиатура поиска (перенесена из ksearch): 0 — кегль считается от высоты клавиши.
 static int     KEY_FONT_PX = 0, FUNC_PX = 0;
 static bool    KEY_FONT_SET = false, FUNC_FONT_SET = false;
@@ -91,9 +91,9 @@ static int     KEY_PX = 34;             // кегль поля запроса; �
 static int     SEARCH_LIST_PX = 42;
 static QString SEARCH_LIST_FONT;
 static bool    SHOW_HIDDEN = true;
-static QString OPEN_BOOKS;   // auto / 1 / 0 — см. open_books в kofm.ini
+static QString OPEN_BOOKS;   // auto / 1 / 0 — см. open_books в kobrowse.ini
 
-// Ключи kofm.ini: имя, значение по умолчанию, пояснение
+// Ключи kobrowse.ini: имя, значение по умолчанию, пояснение
 struct CfgKey { const char *key, *def, *comment; };
 static const CfgKey CFG_KEYS[] = {
     { "list_pt",       "8",           "кегль списка файлов, пт: 8 = петит, 9 = боргес, 10 = корпус (можно дробное: 8.5)" },
@@ -110,7 +110,7 @@ static const CfgKey CFG_KEYS[] = {
     { "long_tap_ms",   "500",         "долгое нажатие (выбор строки), мс" },
     { "idle_min",      "2",           "закрыть менеджер, если не было касаний, мин" },
     { "show_hidden",   "1",           "показывать скрытые файлы и папки (с точкой): 1 — да, 0 — нет" },
-    { "scale_pct",     "100",         "общий масштаб интерфейса kofm, %: 100 — как на Clara HD (по ширине экрана); 50–200" },
+    { "scale_pct",     "100",         "общий масштаб интерфейса kobrowse, %: 100 — как на Clara HD (по ширине экрана); 50–200" },
     { "open_books",    "auto",        "открытие книг тапом: auto — только на проверенной прошивке 4.38; 1 — всегда (на свой риск); 0 — никогда" },
     { "opds_key_pt",   "10",          "кегль клавиш OPDS-клавиатуры, пт (уменьшите, если клавиши не влезают)" },
     { "opds_func_pt",  "5",           "кегль нижнего ряда кнопок OPDS, пт" },
@@ -120,7 +120,7 @@ static const CfgKey CFG_KEYS[] = {
     { "search_list_font", "",         "гарнитура списка результатов поиска; пусто — шрифт виджета" },
 };
 
-// Значение по умолчанию для ключа kofm.ini
+// Значение по умолчанию для ключа kobrowse.ini
 static QString cfgDefault(const QString &key) {
     for (const CfgKey &k : CFG_KEYS) if (key == u8(k.key)) return u8(k.def);
     return QString();
@@ -140,11 +140,11 @@ static void detectDpi() {
     }
 }
 
-// Прочитать kofm.ini. Недостающие ключи дописываются в конец файла с пояснениями
+// Прочитать kobrowse.ini. Недостающие ключи дописываются в конец файла с пояснениями
 // (то, что пользователь уже поменял, не трогаем).
 static void loadConfig() {
     detectDpi();                                     // разные модели Kobo — разная плотность
-    const QString ini = u8(KOFM_INI);
+    const QString ini = u8(KOBROWSE_INI);
     QDir().mkpath(QFileInfo(ini).absolutePath());
     QString text;
     {
@@ -158,8 +158,8 @@ static void loadConfig() {
         if (eq > 0 && !l.startsWith(QLatin1Char(';'))) present << l.left(eq).trimmed();
     }
     QString add;
-    if (!text.contains(u8("[kofm]")))
-        add += u8("[kofm]\n; настройки внешнего вида kofm; применяются при следующем открытии менеджера\n");
+    if (!text.contains(u8("[kobrowse]")))
+        add += u8("[kobrowse]\n; настройки внешнего вида kobrowse; применяются при следующем открытии менеджера\n");
     for (const CfgKey &k : CFG_KEYS)
         if (!present.contains(u8(k.key)))
             add += u8("\n; ") + u8(k.comment) + u8("\n") + u8(k.key) + u8("=") + u8(k.def) + u8("\n");
@@ -173,11 +173,11 @@ static void loadConfig() {
     // число в пределах [lo, hi], иначе значение по умолчанию
     auto num = [&st](const char *key, double def, double lo, double hi) {
         bool ok = false;
-        const double v = st.value(u8("kofm/") + u8(key)).toString().replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
+        const double v = st.value(u8("kobrowse/") + u8(key)).toString().replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
         return (ok && v >= lo && v <= hi) ? v : def;
     };
     SCREEN_DPI *= num("scale_pct", 100, 50, 200) / 100.0;   // до пересчёта пунктов в пиксели
-    OPEN_BOOKS  = st.value(u8("kofm/open_books")).toString().trimmed().toLower();
+    OPEN_BOOKS  = st.value(u8("kobrowse/open_books")).toString().trimmed().toLower();
     LIST_PX     = ptToPx(num("list_pt", 8, 4, 24));
     FONT_BTN    = ptToPx(num("btn_pt", 6, 3, 24));
     FONT_MSG    = ptToPx(num("info_pt", 6, 3, 14));
@@ -199,16 +199,16 @@ static void loadConfig() {
     FUNC_FONT_SET = ff > 0;
     FUNC_PX       = FUNC_FONT_SET ? qMax(8, ptToPx(ff)) : 0;
     SEARCH_LIST_PX   = ptToPx(num("search_list_pt", 10, 4, 24));
-    SEARCH_LIST_FONT = st.value(u8("kofm/search_list_font")).toString().trimmed();
-    LIST_FONT   = st.value(u8("kofm/list_font")).toString().trimmed();
-    BTN_FONT    = st.value(u8("kofm/btn_font")).toString().trimmed();
+    SEARCH_LIST_FONT = st.value(u8("kobrowse/search_list_font")).toString().trimmed();
+    LIST_FONT   = st.value(u8("kobrowse/list_font")).toString().trimmed();
+    BTN_FONT    = st.value(u8("kobrowse/btn_font")).toString().trimmed();
     SHOW_HIDDEN = num("show_hidden", 1, 0, 1) != 0;
 }
 
 // Отладочный лог: файл открывается и сразу закрывается (не держим дескриптор на /mnt/onboard)
 static void klog(const QString &msg) {
-    QDir().mkpath(QFileInfo(u8(KOFM_LOG)).absolutePath());
-    QFile f(u8(KOFM_LOG));
+    QDir().mkpath(QFileInfo(u8(KOBROWSE_LOG)).absolutePath());
+    QFile f(u8(KOBROWSE_LOG));
     if (f.open(QIODevice::Append | QIODevice::Text)) {
         f.write((QDateTime::currentDateTime().toString(u8("hh:mm:ss ")) + msg + u8("\n")).toUtf8());
         f.close();
@@ -237,7 +237,7 @@ static QString uniqueName(const QString &dir, const QString &name, bool isDir) {
     return cand;
 }
 
-// Рекурсивное копирование. Файл пишется во временный «*.kofm_tmp» и переименовывается
+// Рекурсивное копирование. Файл пишется во временный «*.kobrowse_tmp» и переименовывается
 // в конце — при сбое не остаётся «наполовину скопированной» книги под настоящим именем.
 static bool copyRecursive(const QString &src, const QString &dst, QString &err) {
     const QFileInfo fi(src);
@@ -249,7 +249,7 @@ static bool copyRecursive(const QString &src, const QString &dst, QString &err) 
             if (!copyRecursive(k.absoluteFilePath(), dst + u8("/") + k.fileName(), err)) return false;
         return true;
     }
-    const QString tmp = dst + u8(".kofm_tmp");
+    const QString tmp = dst + u8(".kobrowse_tmp");
     QFile::remove(tmp);
     if (!QFile::copy(src, tmp)) {
         QFile::remove(tmp);
@@ -356,7 +356,7 @@ private:
 // Рубленый шрифт Kobo для кнопок: Kobo Nickel (шрифт интерфейса), затем Avenir, иначе любой sans
 static QFont sansFont() {
     const QStringList fam = QFontDatabase().families();
-    if (!BTN_FONT.isEmpty())                       // гарнитура из kofm.ini, если она есть на ридере
+    if (!BTN_FONT.isEmpty())                       // гарнитура из kobrowse.ini, если она есть на ридере
         for (const QString &f : fam)
             if (f.compare(BTN_FONT, Qt::CaseInsensitive) == 0) return QFont(f);
     const char *pref[] = { "Kobo Nickel", "KoboNickel", "Avenir Next", "Avenir", "Rakuten Sans UI App" };
@@ -556,7 +556,7 @@ static bool openBook(const QString &path, bool viaKobalt, QString &err) {
     auto shNull  = nsym<void *>("_ZN10QArrayData11shared_nullE"); // пустой QVector указывает сюда
     if (!getCur || !getDb || !getById || !isValid || !volDtor || !bmCtor || !bmDtor || !vtRVM
         || (viaKobalt ? !showOrI : (!showRdr || !shNull))) {
-        err = u8("Эта прошивка не поддерживает открытие книг из kofm");
+        err = u8("Эта прошивка не поддерживает открытие книг из kobrowse");
         klog(u8("open: symbol missing"));
         return false;
     }
@@ -593,10 +593,10 @@ static bool openBook(const QString &path, bool viaKobalt, QString &err) {
 }
 
 // ================= OPDS: диалог каталога книг =================
-// Открывается по файлу-сигнали /tmp/kofm.opds из NickelMenu. Вся сетевая работа
+// Открывается по файлу-сигнали /tmp/kobrowse.opds из NickelMenu. Вся сетевая работа
 // вынесена в скрипт /mnt/onboard/.adds/opds/opds_get.sh (curl/wget + awk); окно
 // только показывает список, выбирает каталог/книгу и вводит адрес своей клавиатурой.
-static const char *OPDS_TRIGGER = "/tmp/kofm.opds";
+static const char *OPDS_TRIGGER = "/tmp/kobrowse.opds";
 static const char *OPDS_SCRIPT  = "/mnt/onboard/.adds/opds/opds_get.sh";
 static const char *OPDS_CONF    = "/mnt/onboard/.adds/opds/opds.conf";
 static const char *OPDS_LIST    = "/tmp/opds.list";
@@ -669,7 +669,7 @@ private:
 
 class OpdsWindow;
 static OpdsWindow *g_opds = nullptr;
-static QWidget *koboHostWindow();   // определено ниже, используется и kofm, и OPDS
+static QWidget *koboHostWindow();   // определено ниже, используется и kobrowse, и OPDS
 
 class OpdsWindow : public QWidget {
 public:
@@ -705,7 +705,7 @@ public:
         m_list->setRootIsDecorated(false);
         m_list->setIndentation(0);
         m_list->setUniformRowHeights(false);
-        m_list->setItemDelegate(new RowDelegate(m_list, fList)); // как в kofm
+        m_list->setItemDelegate(new RowDelegate(m_list, fList)); // как в kobrowse
         m_list->setSelectionMode(QAbstractItemView::NoSelection);
         m_list->setFocusPolicy(Qt::NoFocus);
         m_list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -728,7 +728,7 @@ public:
         showUrl();
 
         QFont fKey = narrow(sansFont());
-        fKey.setPixelSize(OPDS_KEY_PX);   // кегль из kofm.ini (opds_key_pt)
+        fKey.setPixelSize(OPDS_KEY_PX);   // кегль из kobrowse.ini (opds_key_pt)
         const int KEY_H = qRound(BTN_HEIGHT * 0.8);
         QGridLayout *grid = new QGridLayout();
         grid->setSpacing(ptToPx(2));   // между клавишами 2 пт
@@ -1161,7 +1161,7 @@ private:
             m_entries << it;
             QTreeWidgetItem *w = new QTreeWidgetItem(m_list);
             w->setText(0, label);
-            w->setData(0, ROLE_DIR, it.kind == u8("CAT"));  // каталоги полужирным, как в kofm
+            w->setData(0, ROLE_DIR, it.kind == u8("CAT"));  // каталоги полужирным, как в kobrowse
         }
     }
     void loadFeed(const QString &url, bool pushHistory) {
@@ -1239,8 +1239,8 @@ static void opds_open() {
     klog(u8("opds dialog shown"));
 }
 
-// ================= ПОИСК КНИГ (встроен в kofm) =================
-// Открывается кнопкой «Поиск» в окне kofm (и по сигналу /tmp/ksearch.open).
+// ================= ПОИСК КНИГ (встроен в kobrowse) =================
+// Открывается кнопкой «Поиск» в окне kobrowse (и по сигналу /tmp/ksearch.open).
 // Клавиатура в стиле Plato, поле запроса и список результатов перенесены из
 // отдельного плагина ksearch (ksearch/src/ksearch.cc) — там история правок.
 // layoutText() уже есть выше в этом файле, дубликат не нужен.
@@ -1606,7 +1606,7 @@ static QString tightTitleFamily(int px, const QString &text) {
     return best.isEmpty() ? u8("Sans Serif") : best;
 }
 
-// Шрифт списка: гарнитура из search_list_font (kofm.ini), иначе шрифт виджета; кегль SEARCH_LIST_PX.
+// Шрифт списка: гарнитура из search_list_font (kobrowse.ini), иначе шрифт виджета; кегль SEARCH_LIST_PX.
 // Трекинг, межсловный интервал и растяжение сброшены явно: буквы и слова не раздвигаются.
 static QFont makeListFont(const QFont &base) {
     QFont f = SEARCH_LIST_FONT.isEmpty() ? base : QFont(SEARCH_LIST_FONT);
@@ -1618,7 +1618,7 @@ static QFont makeListFont(const QFont &base) {
     return f;
 }
 
-// Одинаковая настройка QTreeWidget для списков как в kofm.
+// Одинаковая настройка QTreeWidget для списков как в kobrowse.
 static void setupResultList(QTreeWidget *list, const QFont &f) {
     list->setFont(f);
     list->setColumnCount(1);
@@ -1681,7 +1681,7 @@ public:
         f.setWordSpacing(0);
         f.setStretch(QFont::Unstretched);
         f.setBold(false);
-        const QFont fList = makeListFont(font());   // как в kofm: LIST_FONT / LIST_PX, без трекинга
+        const QFont fList = makeListFont(font());   // как в kobrowse: LIST_FONT / LIST_PX, без трекинга
         QFont fKey(face);   fKey.setPixelSize(qMax(8, KEY_FONT_PX));   fKey.setBold(false);
         QFont fField(face); fField.setPixelSize(KEY_PX);
         QFont fFunc(face);  fFunc.setPixelSize(qMax(8, FUNC_PX));      fFunc.setBold(false);
@@ -1920,7 +1920,7 @@ private:
         m_lastKbWidth = availW;
         m_kh = kh;
 
-        // Шрифты: от высоты клавиши, если в kofm.ini явно не задан кегль.
+        // Шрифты: от высоты клавиши, если в kobrowse.ini явно не задан кегль.
         const int symPx = KEY_FONT_SET ? KEY_FONT_PX : qMax(10, qRound(kh * 0.52));
         const int funcPx = FUNC_FONT_SET ? FUNC_PX : qMax(8, qRound(kh * 0.34));
         m_fKey.setPixelSize(symPx);   m_fKey.setBold(false);
@@ -2057,7 +2057,7 @@ private:
         if (q.isEmpty()) { showMsg(u8("Введите часть названия")); return; }
         const QStringList tokens = q.split(QRegExp(u8("\\s+")), QString::SkipEmptyParts);
         m_list->clear(); m_paths.clear(); m_title->setText(u8("Результаты поиска: ") + q);
-        QDirIterator it(u8(KOFM_ROOT), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        QDirIterator it(u8(KOBROWSE_ROOT), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
         while (it.hasNext()) {
             const QString path = it.next();
             if (path.contains(u8("/.")) || !isBook(path)) continue;
@@ -2100,7 +2100,7 @@ private:
         }
         case QEvent::TouchUpdate:
             if (pts.size() >= 2) {
-                // Два пальца — перетаскивание списка по среднему положению (как в kofm)
+                // Два пальца — перетаскивание списка по среднему положению (как в kobrowse)
                 m_longTimer.stop(); m_longBtn = nullptr;
                 const qreal y = (mapFromGlobal(pts.at(0).screenPos().toPoint()).y()
                                  + mapFromGlobal(pts.at(1).screenPos().toPoint()).y()) / 2.0;
@@ -2190,10 +2190,10 @@ static void ksearch_open() {
 }
 
 
-static void kofm_open();
+static void kobrowse_open();
 static QTimer *g_reopen = nullptr;   // переоткрыть окно после сохранения настроек
 
-// Пункты экрана «Настройки»: ключ kofm.ini, подпись, тип, шаг, пределы, знаков после запятой
+// Пункты экрана «Настройки»: ключ kobrowse.ini, подпись, тип, шаг, пределы, знаков после запятой
 enum SetType { S_NUM, S_FONT, S_BOOL, S_OPEN };
 struct SetItem { const char *key, *label; SetType type; double step, lo, hi; int dec; };
 static const SetItem SET_ITEMS[] = {
@@ -2216,9 +2216,9 @@ static const SetItem SET_ITEMS[] = {
 };
 static const int SET_COUNT = int(sizeof(SET_ITEMS) / sizeof(SET_ITEMS[0]));
 
-// Записать значения в kofm.ini: строка «ключ=…» заменяется, комментарии сохраняются
+// Записать значения в kobrowse.ini: строка «ключ=…» заменяется, комментарии сохраняются
 static bool saveConfig(const QStringList &keys, const QStringList &vals) {
-    const QString ini = u8(KOFM_INI);
+    const QString ini = u8(KOBROWSE_INI);
     QString text;
     {
         QFile f(ini);
@@ -2247,13 +2247,13 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
 
 // ---------- окно менеджера ----------
 // Без Q_OBJECT: только сигналы Qt + лямбды, moc не нужен
-class KofmWindow : public QWidget {
+class KobrowseWindow : public QWidget {
 public:
     // parent — главное окно Nickel: менеджер лежит поверх его содержимого, а системные
     // диалоги Nickel (USB, питание) — отдельные окна и остаются сверху
-    explicit KofmWindow(QWidget *parent)
+    explicit KobrowseWindow(QWidget *parent)
         : QWidget(parent),
-          m_root(u8(KOFM_ROOT)), m_trash(u8(KOFM_TRASH)), m_path(m_root), m_showHidden(SHOW_HIDDEN)
+          m_root(u8(KOBROWSE_ROOT)), m_trash(u8(KOBROWSE_TRASH)), m_path(m_root), m_showHidden(SHOW_HIDDEN)
     {
         setAttribute(Qt::WA_DeleteOnClose);     // при закрытии окно удаляется из памяти
         setAttribute(Qt::WA_AcceptTouchEvents); // Nickel шлёт касания как QTouchEvent, не как мышь
@@ -2264,7 +2264,7 @@ public:
                          ));
 
         QFont fBtn = sansFont(); fBtn.setPixelSize(FONT_BTN); // подписи кнопок — рубленым
-        QFont fList = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT); // гарнитура и кегль из kofm.ini
+        QFont fList = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT); // гарнитура и кегль из kobrowse.ini
         fList.setPixelSize(LIST_PX);
         QFont fMsg = font();  fMsg.setPixelSize(FONT_MSG);
         m_bold = fList;       m_bold.setBold(true);
@@ -2306,7 +2306,7 @@ public:
         m_info->hide();
         lay->addWidget(m_info);
 
-        // Экран «Настройки» (kofm.ini): строки «название — значение — [−] [+]», внизу
+        // Экран «Настройки» (kobrowse.ini): строки «название — значение — [−] [+]», внизу
         // Сохранить / По умолчанию / Отмена. Скрыт; на время показа прячутся список и кнопки.
         buildSettings(fMsg, fBtn);
         lay->addWidget(m_settings, 1);
@@ -2432,7 +2432,7 @@ public:
         qApp->installEventFilter(this);
     }
 
-    ~KofmWindow() { qApp->removeEventFilter(this); }
+    ~KobrowseWindow() { qApp->removeEventFilter(this); }
 
 protected:
     // Касания обрабатываем сами: TouchBegin нужно принять, иначе TouchEnd не придёт.
@@ -2773,7 +2773,7 @@ private:
         load();
     }
 
-    // В корзину: перенос в /mnt/onboard/.kofm_trash с датой в начале имени
+    // В корзину: перенос в /mnt/onboard/.kobrowse_trash с датой в начале имени
     void moveToTrash() {
         QDir().mkpath(m_trash);
         const QString stamp = QDateTime::currentDateTime().toString(u8("yyyyMMdd-hhmmss_"));
@@ -2821,7 +2821,7 @@ private:
             parent->setData(0, ROLE_DETAIL, u8("Родительская папка"));
         }
         for (const QFileInfo &fi : entries) {
-            if (fi.fileName().endsWith(u8(".kofm_tmp"))) continue; // недокопированные файлы не показываем
+            if (fi.fileName().endsWith(u8(".kobrowse_tmp"))) continue; // недокопированные файлы не показываем
             auto *it = new QTreeWidgetItem(m_list);
             const bool isDir = fi.isDir();
             const QString path = fi.absoluteFilePath();
@@ -2863,12 +2863,12 @@ private:
 
     // Распаковка .zip в текущую папку: busybox unzip во временную папку (с точкой — Nickel её
     // не индексирует), затем перенос содержимого рядом с архивом; при совпадении имён — «имя (1)».
-    // Архив по желанию — в корзину kofm.
+    // Архив по желанию — в корзину kobrowse.
     void unzipFile(const QString &zip, bool trashZip) {
         m_unzip->hide();
         const QFileInfo zi(zip);
         const QString dir = zi.absolutePath();
-        const QString tmp = dir + u8("/.kofm_unzip_")
+        const QString tmp = dir + u8("/.kobrowse_unzip_")
                           + QDateTime::currentDateTime().toString(u8("yyyyMMdd-hhmmss"));
         QDir().mkpath(tmp);
         QProcess pr;
@@ -2911,8 +2911,8 @@ private:
     void openFile(const QString &path) {
         if (!bookOpenAllowed()) {
             showMessage(OPEN_BOOKS == u8("0")
-                ? u8("Открытие книг выключено (open_books=0 в kofm.ini)")
-                : u8("Открытие книг проверено только на прошивке 4.38. Включить на свой риск: open_books=1 в .adds/kofm/kofm.ini"));
+                ? u8("Открытие книг выключено (open_books=0 в kobrowse.ini)")
+                : u8("Открытие книг проверено только на прошивке 4.38. Включить на свой риск: open_books=1 в .adds/kobrowse/kobrowse.ini"));
             return;
         }
         hide();
@@ -3013,11 +3013,11 @@ private:
 
     void showSettings(bool on) {
         if (on) {
-            QSettings st(u8(KOFM_INI), QSettings::IniFormat);
+            QSettings st(u8(KOBROWSE_INI), QSettings::IniFormat);
             st.setIniCodec(QTextCodec::codecForName("UTF-8"));
             m_setVals.clear();
             for (int i = 0; i < SET_COUNT; ++i) {
-                QString v = st.value(u8("kofm/") + u8(SET_ITEMS[i].key),
+                QString v = st.value(u8("kobrowse/") + u8(SET_ITEMS[i].key),
                                      cfgDefault(u8(SET_ITEMS[i].key))).toString().trimmed();
                 // Числовое значение из старого ini могло выйти за новые пределы
                 if (SET_ITEMS[i].type == S_NUM) {
@@ -3041,7 +3041,7 @@ private:
         if (on) { m_actions->hide(); m_setGeom.start(); } else updateActions();
     }
 
-    // Диагностика: геометрия строк настроек после раскладки (пишется в kofm.log).
+    // Диагностика: геометрия строк настроек после раскладки (пишется в kobrowse.log).
     void logSettingsGeometry() {
         if (!m_settings || !m_settings->isVisible() || m_stepBtns.isEmpty()) return;
         klog(u8("settings geom: box %1x%2 at %3,%4, rows %5")
@@ -3101,11 +3101,11 @@ private:
         refreshSettings();
     }
 
-    // Сохранить в kofm.ini и переоткрыть менеджер с новыми настройками
+    // Сохранить в kobrowse.ini и переоткрыть менеджер с новыми настройками
     void saveSettings() {
         QStringList keys;
         for (int i = 0; i < SET_COUNT; ++i) keys << u8(SET_ITEMS[i].key);
-        if (!saveConfig(keys, m_setVals)) { showMessage(u8("Не удалось записать kofm.ini")); return; }
+        if (!saveConfig(keys, m_setVals)) { showMessage(u8("Не удалось записать kobrowse.ini")); return; }
         klog(u8("settings saved"));
         close();
         if (g_reopen) g_reopen->start();
@@ -3140,7 +3140,7 @@ private:
     QWidget      *m_settings = nullptr, *m_nav = nullptr; // экран настроек; ряд навигации
     QList<QLabel *> m_setLabels;        // значения на экране настроек
     QList<QPushButton *> m_stepBtns;    // кнопки «−»/«+» по строкам: 0,1 — строка 0; 2,3 — строка 1 …
-    QStringList   m_setVals;            // редактируемые значения (как в kofm.ini)
+    QStringList   m_setVals;            // редактируемые значения (как в kobrowse.ini)
     QStringList   m_fonts;              // гарнитуры для выбора
     QWidget      *m_unzip = nullptr;    // панель «Распаковать архив?»
     QLabel       *m_unzipTitle = nullptr;
@@ -3153,7 +3153,7 @@ private:
 };
 
 // ---------- запуск окна ----------
-static QPointer<KofmWindow> g_win;          // одно окно на всё время работы
+static QPointer<KobrowseWindow> g_win;          // одно окно на всё время работы
 static QFileSystemWatcher  *g_watch = nullptr;
 static QTimer              *g_poll = nullptr;  // страховка: inotify на /tmp иногда молчит
 
@@ -3176,15 +3176,15 @@ static QWidget *koboHostWindow() {
     return host;
 }
 
-static void kofm_open() {
+static void kobrowse_open() {
     if (g_win) { g_win->raise(); return; }
 
     // Главное окно Nickel: MWC → activeWindow → любой видимый виджет верхнего уровня
     QWidget *host = koboHostWindow();
     if (!host) { klog(u8("no host window")); return; }
 
-    loadConfig();                     // kofm.ini читается при каждом открытии
-    g_win = new KofmWindow(host);
+    loadConfig();                     // kobrowse.ini читается при каждом открытии
+    g_win = new KobrowseWindow(host);
     g_win->setGeometry(host->rect()); // всё главное окно
     g_win->show();
     g_win->raise();
@@ -3237,11 +3237,11 @@ static void diagRender(const QString &path, const QString &text, const QFont &f)
 // Диагностика шрифтов: какие гарнитуры знает Qt (и есть ли в них кириллица) и каким шрифтом
 // на самом деле нарисованы видимые надписи Nickel с русским текстом.
 // Запускается через DIAG_DELAY_MS после пункта меню — за это время можно открыть нужный экран
-// (диалог, экран подключения USB). Результат — в /tmp/kofm_diag (на экране USB /mnt/onboard отключён);
+// (диалог, экран подключения USB). Результат — в /tmp/kobrowse_diag (на экране USB /mnt/onboard отключён);
 // на диск его переносит пункт NickelMenu «Диагностика: сохранить».
 static const int DIAG_DELAY_MS = 25000;
 static QTimer *g_diagTimer = nullptr;
-static void kofm_font_diag() {
+static void kobrowse_font_diag() {
     QString out;
     QFontDatabase db;
     out += u8("=== Гарнитуры (кириллица: + / -)\n");
@@ -3252,9 +3252,9 @@ static void kofm_font_diag() {
     out += u8("Подстановки для Avenir: ") + QFont::substitutes(u8("Avenir")).join(u8(", ")) + u8("\n");
     out += u8("\n=== Видимые надписи с кириллицей: класс | объект | запрошенный шрифт | фактический | px | разрядка | регистр | текст\n");
     QSet<QString> seen;
-    // снимки надписей: .adds/kofm/diag/dNN_widget.png (как рисует Nickel), dNN_same.png (тот же шрифт, обычный
+    // снимки надписей: .adds/kobrowse/diag/dNN_widget.png (как рисует Nickel), dNN_same.png (тот же шрифт, обычный
     // drawText), dNN_an.png («Avenir Next» напрямую)
-    const QString shotDir = u8("/tmp/kofm_diag");
+    const QString shotDir = u8("/tmp/kobrowse_diag");
     QDir().mkpath(shotDir);
     for (const QString &old : QDir(shotDir).entryList(QDir::Files)) QFile::remove(shotDir + u8("/") + old);
     int shots = 0;
@@ -3332,22 +3332,22 @@ static void kofm_font_diag() {
 
 // Проверка файлов-сигналов. Вызывается и из inotify, и по таймеру-страховке:
 // на Clara inotify на /tmp иногда не приходит после долгого сна — пункт молчал.
-static void checkKofmTriggers() {
-    if (QFile::exists(u8(KOFM_TRIGGER))) { QFile::remove(u8(KOFM_TRIGGER)); kofm_open(); }
+static void checkKobrowseTriggers() {
+    if (QFile::exists(u8(KOBROWSE_TRIGGER))) { QFile::remove(u8(KOBROWSE_TRIGGER)); kobrowse_open(); }
     if (QFile::exists(u8(OPDS_TRIGGER))) { QFile::remove(u8(OPDS_TRIGGER)); opds_open(); }
     if (QFile::exists(u8(KSEARCH_TRIGGER))) { QFile::remove(u8(KSEARCH_TRIGGER)); ksearch_open(); }
-    if (QFile::exists(u8(KOFM_DIAG))) {
-        QFile::remove(u8(KOFM_DIAG));
+    if (QFile::exists(u8(KOBROWSE_DIAG))) {
+        QFile::remove(u8(KOBROWSE_DIAG));
         if (g_diagTimer) g_diagTimer->start();
     }
 }
 
 // Вызывается один раз при загрузке плагина в Nickel
-static int kofm_init() {
-    QFile::remove(u8(KOFM_TRIGGER)); // убрать старый сигнал, если остался
+static int kobrowse_init() {
+    QFile::remove(u8(KOBROWSE_TRIGGER)); // убрать старый сигнал, если остался
     QFile::remove(u8(OPDS_TRIGGER));
     QFile::remove(u8(KSEARCH_TRIGGER));
-    QFile::remove(u8(KOFM_DIAG));
+    QFile::remove(u8(KOBROWSE_DIAG));
     if (!QCoreApplication::instance()) {
         nh_log("no QApplication at init, trigger disabled");
         return 0;
@@ -3355,36 +3355,36 @@ static int kofm_init() {
     // inotify на /tmp — основной путь; таймер раз в 700 мс — страховка от пропущенного сигнала
     g_watch = new QFileSystemWatcher(QStringList() << u8("/tmp"));
     QObject::connect(g_watch, &QFileSystemWatcher::directoryChanged,
-                     [](const QString &) { checkKofmTriggers(); });
+                     [](const QString &) { checkKobrowseTriggers(); });
     g_poll = new QTimer();
     g_poll->setInterval(700);
-    QObject::connect(g_poll, &QTimer::timeout, []() { checkKofmTriggers(); });
+    QObject::connect(g_poll, &QTimer::timeout, []() { checkKobrowseTriggers(); });
     g_poll->start();
     g_diagTimer = new QTimer();
     g_diagTimer->setSingleShot(true);
     g_diagTimer->setInterval(DIAG_DELAY_MS);
-    QObject::connect(g_diagTimer, &QTimer::timeout, []() { kofm_font_diag(); });
+    QObject::connect(g_diagTimer, &QTimer::timeout, []() { kobrowse_font_diag(); });
     // Таймер переоткрытия окна после «Сохранить» в настройках (старое окно успевает удалиться)
     g_reopen = new QTimer();
     g_reopen->setSingleShot(true);
     g_reopen->setInterval(300);
-    QObject::connect(g_reopen, &QTimer::timeout, []() { kofm_open(); });
-    nh_log("watching %s", KOFM_TRIGGER);
+    QObject::connect(g_reopen, &QTimer::timeout, []() { kobrowse_open(); });
+    nh_log("watching %s", KOBROWSE_TRIGGER);
     return 0;
 }
 
 // Описание плагина; файл uninstall_flag на ридере удаляет плагин при загрузке.
 // failsafe: если Nickel упадёт в первые 10 с после старта, плагин отключится сам.
-static struct nh_info kofm_info = {
-    .name           = "kofm",
+static struct nh_info kobrowse_info = {
+    .name           = "kobrowse",
     .desc           = "File manager for Kobo",
-    .uninstall_flag = "/mnt/onboard/.adds/kofm/uninstall",
+    .uninstall_flag = "/mnt/onboard/.adds/kobrowse/uninstall",
     .uninstall_xflag = nullptr,
     .failsafe_delay = 10,
 };
 
-static struct nh_hook  kofm_hook[]  = { {0} };
-static struct nh_dlsym kofm_dlsym[] = {
+static struct nh_hook  kobrowse_hook[]  = { {0} };
+static struct nh_dlsym kobrowse_dlsym[] = {
     { .name = "_ZN20MainWindowController14sharedInstanceEv",
       .out = nh_symoutptr(MWC_sharedInstance), .desc = "", .optional = true },
     { .name = "_ZNK20MainWindowController11currentViewEv",
@@ -3393,8 +3393,8 @@ static struct nh_dlsym kofm_dlsym[] = {
 };
 
 NickelHook(
-    .init  = &kofm_init,
-    .info  = &kofm_info,
-    .hook  = kofm_hook,
-    .dlsym = kofm_dlsym,
+    .init  = &kobrowse_init,
+    .info  = &kobrowse_info,
+    .hook  = kobrowse_hook,
+    .dlsym = kobrowse_dlsym,
 )

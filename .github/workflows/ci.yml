@@ -23,6 +23,6 @@ jobs:
         run: bash scripts/build-kobo.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: kofm-kobo-qt5-test
-          path: kofm_KoboRoot.tgz
+          name: kobrowse-kobo-qt5-test
+          path: kobrowse_KoboRoot.tgz
           if-no-files-found: error
