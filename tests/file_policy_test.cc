@@ -234,6 +234,18 @@ int main(int argc, char **argv) {
     require(!QFileInfo(root + "/.adds/nm/kobrowse").exists(), "app menu removed");
     require(QFileInfo(root + "/.adds/nm/other").exists() && QFileInfo(root + "/outside.txt").exists(),
             "other data and link target retained");
+    const QString brokenRoot = tmp.path() + "/broken";
+    require(QDir().mkpath(brokenRoot + "/.adds/kobrowse"), "uninstall error fixture");
+    writeFile(brokenRoot + "/.adds/kobrowse/kobrowse.ini", "settings");
+    writeFile(brokenRoot + "/.kobrowse_trash", "not a directory");
+    writeFile(brokenRoot + "/plugin.so", "plugin");
+    require(!cleanupAppInstall(brokenRoot, brokenRoot + "/plugin.so", uninstallError), "invalid trash aborts uninstall");
+    require(QFileInfo(brokenRoot + "/.adds/kobrowse/kobrowse.ini").exists()
+            && QFileInfo(brokenRoot + "/plugin.so").exists(), "invalid trash preserves plugin and settings");
+    require(::symlink("missing-target", (brokenRoot + "/.adds/kobrowse/uninstall").toLocal8Bit().constData()) == 0,
+            "dangling marker fixture");
+    require(!uninstallRequested(brokenRoot), "dangling marker is not absent");
+    require(!uninstallRequested(tmp.path() + "/not-mounted"), "missing root is not uninstall request");
     QTextStream(stdout) << "Filesystem tests passed\n";
     return 0;
 }

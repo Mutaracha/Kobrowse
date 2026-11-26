@@ -167,21 +167,33 @@ static void loadConfig() {
         QFile f(ini);
         if (f.open(QIODevice::ReadOnly | QIODevice::Text)) { text = QString::fromUtf8(f.readAll()); f.close(); }
     }
+    QStringList lines = text.split(QLatin1Char('\n'));
     QStringList present;
-    for (const QString &line : text.split(QLatin1Char('\n'))) {
-        const QString l = line.trimmed();
+    bool inSection = false, hasSection = false;
+    int insertAt = -1;
+    for (int i = 0; i < lines.size(); ++i) {
+        const QString l = lines[i].trimmed();
+        if (l.startsWith(QLatin1Char('[')) && l.endsWith(QLatin1Char(']'))) {
+            if (inSection && insertAt < 0) insertAt = i;
+            inSection = l == u8("[kobrowse]");
+            if (inSection) hasSection = true;
+            continue;
+        }
         const int eq = l.indexOf(QLatin1Char('='));
-        if (eq > 0 && !l.startsWith(QLatin1Char(';'))) present << l.left(eq).trimmed();
+        if (inSection && eq > 0 && !l.startsWith(QLatin1Char(';')) && !l.startsWith(QLatin1Char('#')))
+            present << l.left(eq).trimmed();
     }
-    QString add;
-    if (!text.contains(u8("[kobrowse]")))
-        add += u8("[kobrowse]\n; настройки внешнего вида kobrowse; применяются при следующем открытии менеджера\n");
+    QStringList added;
+    if (!hasSection) added << u8("[kobrowse]") << u8("; настройки Kobrowse");
     for (const CfgKey &k : CFG_KEYS)
         if (!present.contains(u8(k.key)))
-            add += u8("\n; ") + u8(k.comment) + u8("\n") + u8(k.key) + u8("=") + u8(k.def) + u8("\n");
-    if (!add.isEmpty()) {
-        QFile f(ini);
-        if (f.open(QIODevice::Append | QIODevice::Text)) { f.write(add.toUtf8()); f.close(); }
+            added << QString() << (u8("; ") + u8(k.comment)) << (u8(k.key) + u8("=") + u8(k.def));
+    if (!added.isEmpty()) {
+        if (insertAt < 0) insertAt = lines.size();
+        for (const QString &line : added) lines.insert(insertAt++, line);
+        QSaveFile f(ini);
+        const QByteArray output = lines.join(u8("\n")).toUtf8() + "\n";
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text) && f.write(output) == output.size()) f.commit();
     }
 
     QSettings st(ini, QSettings::IniFormat);
@@ -230,7 +242,8 @@ static void klog(const QString &msg) {
     if (!st.value(u8("kobrowse/logging_enabled"), 1).toBool()) return;
     const QString dir = QFileInfo(u8(KOBROWSE_LOG)).absolutePath();
     if (!safeLocalPath(u8(KOBROWSE_ROOT), dir, true) || !QDir().mkpath(dir)
-        || !safeLocalPath(u8(KOBROWSE_ROOT), dir)) return;
+        || !safeLocalPath(u8(KOBROWSE_ROOT), dir)
+        || !safeLocalPath(u8(KOBROWSE_ROOT), u8(KOBROWSE_LOG), true)) return;
     QFile f(u8(KOBROWSE_LOG));
     if (f.open(QIODevice::Append | QIODevice::Text)) {
         f.write((QDateTime::currentDateTime().toString(u8("hh:mm:ss ")) + msg + u8("\n")).toUtf8());
@@ -2367,18 +2380,29 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
         if (f.open(QIODevice::ReadOnly | QIODevice::Text)) { text = QString::fromUtf8(f.readAll()); f.close(); }
     }
     QStringList lines = text.split(QLatin1Char('\n'));
-    for (int i = 0; i < keys.size(); ++i) {
-        bool found = false;
-        for (QString &l : lines) {
-            const QString t = l.trimmed();
-            const int eq = t.indexOf(QLatin1Char('='));
-            if (eq > 0 && !t.startsWith(QLatin1Char(';')) && t.left(eq).trimmed() == keys[i]) {
-                l = keys[i] + u8("=") + vals[i];
-                found = true;
-            }
+    bool inSection = false, hasSection = false;
+    int insertAt = -1;
+    QSet<QString> found;
+    for (int n = 0; n < lines.size(); ++n) {
+        QString &line = lines[n];
+        const QString t = line.trimmed();
+        if (t.startsWith(QLatin1Char('[')) && t.endsWith(QLatin1Char(']'))) {
+            if (inSection && insertAt < 0) insertAt = n;
+            inSection = t == u8("[kobrowse]");
+            if (inSection) hasSection = true;
+            continue;
         }
-        if (!found) lines << keys[i] + u8("=") + vals[i];
+        if (!inSection || t.startsWith(QLatin1Char(';')) || t.startsWith(QLatin1Char('#'))) continue;
+        const int eq = t.indexOf(QLatin1Char('='));
+        if (eq <= 0) continue;
+        const QString key = t.left(eq).trimmed();
+        const int index = keys.indexOf(key);
+        if (index >= 0) { line = key + u8("=") + vals[index]; found.insert(key); }
     }
+    if (!hasSection) { lines << u8("[kobrowse]"); insertAt = lines.size(); }
+    if (insertAt < 0) insertAt = lines.size();
+    for (int i = 0; i < keys.size(); ++i)
+        if (!found.contains(keys[i])) lines.insert(insertAt++, keys[i] + u8("=") + vals[i]);
     QSaveFile f(ini);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
     const QByteArray output = lines.join(u8("\n")).toUtf8();
@@ -2530,6 +2554,19 @@ public:
                                    "QTreeWidget::item{padding-left:12px;}"));
         m_actions->setItemDelegate(new ActionMenuDelegate(m_actions));
         m_actions->hide();
+        m_fontPicker = new QTreeWidget(this);
+        m_fontPicker->setColumnCount(1); m_fontPicker->setHeaderHidden(true);
+        m_fontPicker->setRootIsDecorated(false); m_fontPicker->setIndentation(0);
+        m_fontPicker->setFont(fMsg);
+        m_fontPicker->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_fontPicker->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_fontPicker->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+        m_fontPicker->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
+                                      "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"));
+        m_fontPicker->hide();
+        connect(m_fontPicker, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
+            chooseFont(item);
+        });
         connect(m_actions, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int) {
             if (it && (it->flags() & Qt::ItemIsEnabled)) runMenuAction(it->data(0, Qt::UserRole).toInt());
         });
@@ -2671,7 +2708,10 @@ protected:
             m_menuTouch = m_actions->isVisible()
                 && m_actions->viewport()->rect().contains(m_actions->viewport()->mapFrom(this, p));
             m_menuScrollStart = m_actions->verticalScrollBar()->value();
-            m_settingsTouch = m_settings->isVisible() && m_settingsScroll
+            m_fontPickerTouch = m_fontPicker->isVisible()
+                && m_fontPicker->viewport()->rect().contains(m_fontPicker->viewport()->mapFrom(this, p));
+            if (m_fontPickerTouch) m_fontPickerScrollStart = m_fontPicker->verticalScrollBar()->value();
+            m_settingsTouch = !m_fontPicker->isVisible() && m_settings->isVisible() && m_settingsScroll
                 && m_settingsScroll->viewport()->rect().contains(m_settingsScroll->viewport()->mapFrom(this, p));
             if (m_settingsTouch) m_settingsScrollStart = m_settingsScroll->verticalScrollBar()->value();
             if (pts.size() >= 2) {
@@ -2693,6 +2733,11 @@ protected:
             }
             break;
         case QEvent::TouchUpdate:
+            if (m_fontPickerTouch && !pts.isEmpty()) {
+                if ((p - m_pressPos).manhattanLength() > SWIPE_PX || pts.size() >= 2) m_moved = true;
+                if (m_moved) m_fontPicker->verticalScrollBar()->setValue(m_fontPickerScrollStart - (p.y() - m_pressPos.y()));
+                break;
+            }
             if (m_settingsTouch && !pts.isEmpty()) {
                 if ((p - m_pressPos).manhattanLength() > SWIPE_PX) m_moved = true;
                 if (pts.size() >= 2) m_moved = true;
@@ -2751,6 +2796,8 @@ protected:
         QWidget::resizeEvent(e);
         if (m_list) m_list->doItemsLayout();
         placeActionMenu();
+        if (m_fontPicker && m_fontPicker->isVisible())
+            m_fontPicker->setGeometry(rect().adjusted(GAP * 2, GAP * 2, -GAP * 2, -GAP * 2));
         fitButtonFont();
         m_pageTimer.start(0);
     }
@@ -2771,6 +2818,12 @@ private:
 
     // Касание в точке p (координаты окна)
     void tapAt(const QPoint &p, bool longTap) {
+        if (m_fontPicker->isVisible()) {
+            const QPoint pos = m_fontPicker->viewport()->mapFrom(this, p);
+            if (m_fontPicker->viewport()->rect().contains(pos)) chooseFont(m_fontPicker->itemAt(pos));
+            else m_fontPicker->hide();
+            return;
+        }
         if (m_actions->isVisible()) {
             const QPoint menuPoint = m_actions->viewport()->mapFrom(this, p);
             if (m_actions->viewport()->rect().contains(menuPoint)) {
@@ -3527,9 +3580,15 @@ private:
             } else {
                 val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
                 val->setMinimumWidth(qMax(70, qRound(180 * sc))); r->addWidget(val);
-                const int bw = qMax(32, qRound(80 * sc));
-                makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
-                makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
+                if (SET_ITEMS[i].type == S_FONT) {
+                    val->setMaximumWidth(qMax(70, qRound(180 * sc)));
+                    QPushButton *pick = makeButton(r, fBtn, "Выбрать", rowH, 0);
+                    connect(pick, &QPushButton::clicked, [this, i]() { openFontPicker(i); });
+                } else {
+                    const int bw = qMax(32, qRound(80 * sc));
+                    makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
+                    makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
+                }
             }
             m_setLabels[i] = val; m_switches[i] = toggle;
             rows->addWidget(line);
@@ -3554,6 +3613,36 @@ private:
         connect(bCanc, &QPushButton::clicked, [this]() { showSettings(false); });
         m_settings->hide();
         m_fonts << QString() << QFontDatabase().families();
+    }
+
+    void openFontPicker(int row) {
+        if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_FONT) return;
+        m_fontPickerRow = row;
+        m_fontPicker->clear();
+        QTreeWidgetItem *cancel = new QTreeWidgetItem(m_fontPicker);
+        cancel->setText(0, u8("Отмена")); cancel->setData(0, Qt::UserRole, -1);
+        cancel->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
+        QTreeWidgetItem *current = nullptr;
+        for (int n = 0; n < m_fonts.size(); ++n) {
+            QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
+            item->setText(0, m_fonts[n].isEmpty() ? u8("Системный") : m_fonts[n]);
+            item->setData(0, Qt::UserRole, n);
+            item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
+            if (m_fonts[n].compare(m_setVals[row], Qt::CaseInsensitive) == 0) current = item;
+        }
+        m_fontPicker->setGeometry(rect().adjusted(GAP * 2, GAP * 2, -GAP * 2, -GAP * 2));
+        m_fontPicker->show(); m_fontPicker->raise();
+        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+    }
+
+    void chooseFont(QTreeWidgetItem *item) {
+        if (!item) return;
+        const int n = item->data(0, Qt::UserRole).toInt();
+        if (n >= 0 && n < m_fonts.size() && m_fontPickerRow >= 0 && m_fontPickerRow < m_setVals.size()) {
+            m_setVals[m_fontPickerRow] = m_fonts[n];
+            refreshSettings();
+        }
+        m_fontPicker->hide();
     }
 
     void setSettingsTab(int tab) {
@@ -3639,7 +3728,11 @@ private:
                     ? (enabled ? u8("включена") : u8("отключена"))
                     : (enabled ? u8("показывать") : u8("скрывать"));
             }
-            if (SET_ITEMS[i].type == S_FONT && v.isEmpty()) shown = u8("как в Nickel");
+            if (SET_ITEMS[i].type == S_FONT) {
+                if (v.isEmpty()) shown = u8("Системный");
+                if (m_setLabels[i]) shown = QFontMetrics(m_setLabels[i]->font()).elidedText(
+                    shown, Qt::ElideRight, m_setLabels[i]->maximumWidth());
+            }
             if (SET_ITEMS[i].type == S_OPEN)
                 shown = v == u8("1") ? u8("всегда") : v == u8("0") ? u8("никогда") : u8("авто (4.38)");
             if (m_setLabels[i]) m_setLabels[i]->setText(shown);
@@ -3711,8 +3804,9 @@ private:
     QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom, m_holdTimer, m_pageTimer;
     QString       m_holdPath;
     QStringList   m_deleteSnapshot;
-    bool          m_menuTouch = false;
-    int           m_menuScrollStart = 0;
+    bool          m_menuTouch = false, m_fontPickerTouch = false;
+    int           m_menuScrollStart = 0, m_fontPickerScrollStart = 0, m_fontPickerRow = -1;
+    QTreeWidget *m_fontPicker = nullptr;
     bool          m_holdFired = false, m_holdBlank = false, m_menuRequested = false, m_swipeList = false;
     int           m_pendingDelete = 0;
     QPoint        m_pressPos;
