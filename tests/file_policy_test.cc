@@ -130,6 +130,10 @@ int main(int argc, char **argv) {
     require(!QFileInfo(destDir + "/result").exists(), "failure leaves no partial destination");
     require(QFileInfo(destDir + "/result.kobrowse_tmp").exists(), "user temporary-name file preserved");
     require(QDir(destDir).entryList(QStringList() << ".kobrowse-copy-*", QDir::Dirs | QDir::Hidden).isEmpty(), "failed stage cleaned");
+    require(copyStagedTree(root, sourceDir + "/first", destDir + "/single", copyError), "copy file");
+    QFile copied(destDir + "/single");
+    require(copied.open(QIODevice::ReadOnly) && copied.readAll() == "first", "copied file contents");
+    copied.close();
     require(copyStagedTree(root, sourceDir, destDir + "/result", copyError), "copy folder");
     require(QFileInfo(destDir + "/result/sub/.hidden").exists(), "nested hidden copied");
     require(!copyStagedTree(root, sourceDir, destDir + "/result", copyError), "copy collision rejected");

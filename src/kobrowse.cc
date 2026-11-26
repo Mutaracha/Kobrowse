@@ -2971,8 +2971,8 @@ private:
         }
         const int w = qBound(1, widthNeeded + qMax(48, GAP * 2), qMax(1, width() - 2 * GAP));
         const int h = qMin(height() - 2 * GAP, heightNeeded);
-        m_actions->setGeometry(width() - GAP - w, GAP, w, qMax(1, h));
-        if (m_actions->isVisible()) m_actions->raise();
+        const QRect geometry(width() - GAP - w, GAP, w, qMax(1, h));
+        if (m_actions->geometry() != geometry) m_actions->setGeometry(geometry);
     }
     void updateActions() {
         m_info->hide();
