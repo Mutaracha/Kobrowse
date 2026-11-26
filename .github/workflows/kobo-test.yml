@@ -20,7 +20,14 @@ jobs:
       - name: Install Qt 5 for filesystem tests
         run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config zlib1g-dev dosfstools
       - name: Test filesystem policies
-        run: bash tests/run-file-policy-tests.sh
+        run: |
+          mkdir -p build
+          if ! bash tests/run-file-policy-tests.sh > build/filesystem-test.log 2>&1; then
+            cat build/filesystem-test.log
+            tail -n 15 build/filesystem-test.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/filesystem-test.log
       - name: Test protected folders on disposable FAT image
         run: bash tests/run-fat-policy-tests.sh
       - name: Test whole-row pagination (offscreen)
