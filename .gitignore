@@ -1,0 +1,8 @@
+# NickelHook build products (the reference libkofm.so remains tracked).
+*.o
+*.moc
+*.moc.o
+kofm_KoboRoot.tgz
+kofm.tgz
+compile_commands.json
+__pycache__/

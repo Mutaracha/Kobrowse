@@ -268,7 +268,8 @@ static bool copyRecursive(const QString &src, const QString &dst, QString &err) 
 static const int ROLE_PATH = Qt::UserRole,     // полный путь
                  ROLE_DIR  = Qt::UserRole + 1, // это папка
                  ROLE_MARK = Qt::UserRole + 2, // строка отмечена
-                 ROLE_SIZE = Qt::UserRole + 3; // размер текстом (для файлов)
+                 ROLE_DETAIL = Qt::UserRole + 4, // дата и размер
+                 ROLE_PARENT = Qt::UserRole + 5; // специальная строка «..»
 
 // Разбивка текста на строки по ширине: по словам, а слово длиннее строки — где угодно.
 // Возвращает высоту; если painter задан — ещё и рисует.
@@ -292,34 +293,46 @@ static qreal layoutText(const QString &text, const QFont &f, qreal width,
     return y;
 }
 
-// Строка списка рисуется полностью здесь (стили Qt не участвуют):
-// имя целиком в 1–3+ строки, размер справа, отмеченная строка — инверсией.
+// Контрастные пиктограммы и двухстрочные сведения удобны на e-ink.
+// Делегат также используется старым OPDS-списком, где сведений может не быть.
 class RowDelegate : public QStyledItemDelegate {
 public:
-    RowDelegate(QWidget *view, const QFont &f) : QStyledItemDelegate(view), m_view(view), m_font(f) {
-        m_sizeW = QFontMetrics(f).width(u8("0000.0 КБ")) + 16;
-    }
+    RowDelegate(QWidget *view, const QFont &f) : QStyledItemDelegate(view), m_view(view), m_font(f) {}
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &idx) const override {
-        const qreal h = layoutText(idx.data().toString(), fontFor(idx), nameWidth());
-        return QSize(m_view->width(), int(h) + 2 * PAD_V + 1);
+        const qreal h = layoutText(idx.data().toString(), fontFor(idx), textWidth());
+        const QString detail = idx.data(ROLE_DETAIL).toString();
+        const qreal d = detail.isEmpty() ? 0 : layoutText(detail, detailFont(), textWidth());
+        return QSize(m_view->width(), qMax(iconSize(), int(h + d)) + 2 * PAD_V + 1);
     }
     void paint(QPainter *p, const QStyleOptionViewItem &opt, const QModelIndex &idx) const override {
         const bool mark = idx.data(ROLE_MARK).toBool();
+        const QColor ink = mark ? Qt::white : Qt::black;
         p->save();
         p->fillRect(opt.rect, mark ? Qt::black : Qt::white);
-        p->setPen(mark ? Qt::white : Qt::black);
-        // имя
-        layoutText(idx.data().toString(), fontFor(idx), nameWidth(), p,
-                   QPointF(opt.rect.left() + PAD_H, opt.rect.top() + PAD_V));
-        // размер — справа, на уровне первой строки
-        const QString size = idx.data(ROLE_SIZE).toString();
-        if (!size.isEmpty()) {
-            p->setFont(m_font);
-            QRect r(opt.rect.right() - m_sizeW - PAD_H, opt.rect.top() + PAD_V,
-                    m_sizeW, QFontMetrics(m_font).height());
-            p->drawText(r, Qt::AlignRight | Qt::AlignVCenter, size);
+        p->setPen(QPen(ink, qMax(1, m_font.pixelSize() / 16)));
+        p->setBrush(Qt::NoBrush);
+        const int sz = iconSize();
+        const QRectF r(opt.rect.left() + PAD_H, opt.rect.top() + PAD_V, sz, sz);
+        if (idx.data(ROLE_DIR).toBool()) {
+            QPainterPath folder;
+            folder.moveTo(r.left(), r.top() + sz * .25);
+            folder.lineTo(r.left(), r.top() + sz * .12);
+            folder.lineTo(r.left() + sz * .38, r.top() + sz * .12);
+            folder.lineTo(r.left() + sz * .48, r.top() + sz * .25);
+            folder.lineTo(r.right(), r.top() + sz * .25);
+            folder.lineTo(r.right(), r.bottom() - sz * .1);
+            folder.lineTo(r.left(), r.bottom() - sz * .1);
+            folder.closeSubpath();
+            p->drawPath(folder);
+        } else {
+            p->drawRect(r.adjusted(sz * .16, sz * .06, -sz * .16, -sz * .06));
         }
-        // разделитель
+        p->setPen(ink);
+        const QPointF pos(opt.rect.left() + PAD_H * 2 + sz, opt.rect.top() + PAD_V);
+        const qreal h = layoutText(idx.data().toString(), fontFor(idx), textWidth(), p, pos);
+        const QString detail = idx.data(ROLE_DETAIL).toString();
+        if (!detail.isEmpty())
+            layoutText(detail, detailFont(), textWidth(), p, QPointF(pos.x(), pos.y() + h));
         if (!mark) {
             p->setPen(QColor(150, 150, 150));
             p->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
@@ -328,17 +341,16 @@ public:
     }
 private:
     enum { PAD_V = 10, PAD_H = 6 };
+    int iconSize() const { return qMax(20, m_font.pixelSize()); }
+    QFont detailFont() const { QFont f = m_font; f.setPixelSize(qMax(10, m_font.pixelSize() * 3 / 4)); return f; }
     QFont fontFor(const QModelIndex &idx) const {
         QFont f = m_font;
-        f.setBold(idx.data(ROLE_DIR).toBool()); // папки — полужирным
+        f.setBold(idx.data(ROLE_DIR).toBool());
         return f;
     }
-    qreal nameWidth() const {
-        return qMax(100, m_view->width() - m_sizeW - 3 * PAD_H);
-    }
+    qreal textWidth() const { return qMax(40, m_view->width() - iconSize() - 3 * PAD_H); }
     QWidget *m_view;
-    QFont    m_font;
-    int      m_sizeW;
+    QFont m_font;
 };
 
 // Рубленый шрифт Kobo для кнопок: Kobo Nickel (шрифт интерфейса), затем Avenir, иначе любой sans
@@ -2261,7 +2273,14 @@ public:
         lay->setContentsMargins(GAP, GAP, GAP, GAP);
         lay->setSpacing(GAP);
 
-        // Список: колонка 0 — имя, колонка 1 — размер
+        // Текущий путь остаётся видимым при прокрутке списка.
+        m_pathLabel = new QLabel(this);
+        m_pathLabel->setFont(fMsg);
+        m_pathLabel->setWordWrap(true);
+        m_pathLabel->setTextFormat(Qt::PlainText);
+        lay->addWidget(m_pathLabel);
+
+        // Список файлов и папок
         m_list = new QTreeWidget(this);
         m_list->setFont(fList);
         m_list->setColumnCount(1);
@@ -2679,7 +2698,7 @@ private:
     }
 
     void toggleMark(QTreeWidgetItem *it) {
-        if (!it) return;
+        if (!it || it->data(0, ROLE_PARENT).toBool()) return;
         const QString path = it->data(0, ROLE_PATH).toString();
         if (path.isEmpty()) return;
         const bool on = !m_marked.contains(path);
@@ -2775,6 +2794,7 @@ private:
     // Прочитать текущую папку и заполнить список
     void load() {
         if (m_unzip) m_unzip->hide();
+        m_pathLabel->setText(m_path);
         m_btnUp->setEnabled(m_path != m_root);
         m_btnUp->update();
         m_list->clear();
@@ -2793,13 +2813,23 @@ private:
         const QFileInfoList entries =
             dir.entryInfoList(flt, QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
 
+        if (m_path != m_root) {
+            QTreeWidgetItem *parent = new QTreeWidgetItem(m_list);
+            parent->setText(0, u8(".."));
+            parent->setData(0, ROLE_DIR, true);
+            parent->setData(0, ROLE_PARENT, true);
+            parent->setData(0, ROLE_DETAIL, u8("Родительская папка"));
+        }
         for (const QFileInfo &fi : entries) {
             if (fi.fileName().endsWith(u8(".kofm_tmp"))) continue; // недокопированные файлы не показываем
             auto *it = new QTreeWidgetItem(m_list);
             const bool isDir = fi.isDir();
             const QString path = fi.absoluteFilePath();
             it->setText(0, fi.fileName()); // имя целиком, с расширением; папки — полужирным
-            if (!isDir) it->setData(0, ROLE_SIZE, humanSize(fi.size()));
+            QString detail = fi.lastModified().toString(u8("dd.MM.yyyy hh:mm"));
+            if (!isDir && !fi.isSymLink()) detail += u8("  ·  ") + humanSize(fi.size());
+            if (fi.isSymLink()) detail += u8("  ·  → ") + fi.symLinkTarget();
+            it->setData(0, ROLE_DETAIL, detail);
             it->setData(0, ROLE_PATH, path);
             it->setData(0, ROLE_DIR, isDir);
             if (m_marked.contains(path)) setMarkedLook(it, true);
@@ -2810,6 +2840,7 @@ private:
     // Нажатие на строку: папка — войти; файлы — открытие на следующем этапе
     void onItem(QTreeWidgetItem *it) {
         if (!it) return;
+        if (it->data(0, ROLE_PARENT).toBool()) { goUp(); return; }
         const QString path = it->data(0, ROLE_PATH).toString();
         if (path.isEmpty()) return;
         if (it->data(0, ROLE_DIR).toBool()) {
@@ -3002,6 +3033,7 @@ private:
             refreshSettings();
         }
         m_list->setVisible(!on);
+        m_pathLabel->setVisible(!on);
         m_nav->setVisible(!on);
         m_info->hide();
         m_msg->hide();
@@ -3104,7 +3136,7 @@ private:
     QStringList   m_clip;            // буфер: пути для вставки
     bool          m_clipCut = false; // буфер «вырезан» (перенос) или «скопирован»
     QTreeWidget  *m_list = nullptr;
-    QLabel       *m_msg = nullptr, *m_info = nullptr;
+    QLabel       *m_msg = nullptr, *m_info = nullptr, *m_pathLabel = nullptr;
     QWidget      *m_settings = nullptr, *m_nav = nullptr; // экран настроек; ряд навигации
     QList<QLabel *> m_setLabels;        // значения на экране настроек
     QList<QPushButton *> m_stepBtns;    // кнопки «−»/«+» по строкам: 0,1 — строка 0; 2,3 — строка 1 …
