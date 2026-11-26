@@ -11,4 +11,8 @@ inline PageState pageState(int value, int maximum, int step) {
     const int current = value == maximum ? total : 1 + value / step;
     return PageState{current, total, value > 0, value < maximum};
 }
+// Returns +1 for the next page, -1 for the previous page, 0 for a non-vertical gesture.
+inline int pageSwipeDirection(int dx, int dy, int threshold) {
+    return std::abs(dy) > threshold && std::abs(dy) > std::abs(dx) ? (dy < 0 ? 1 : -1) : 0;
+}
 #endif

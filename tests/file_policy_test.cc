@@ -1,6 +1,7 @@
 #include "../src/file_policy.h"
 #include "../src/file_mutations.h"
 #include "../src/pagination.h"
+#include "../src/home_folder.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QTemporaryDir>
@@ -30,6 +31,9 @@ int main(int argc, char **argv) {
     require(p.current == 2 && p.total == 4 && p.previous && p.next, "middle page");
     p = pageState(220, 220, 100);
     require(p.current == 4 && p.total == 4 && p.previous && !p.next, "short last page");
+    require(pageSwipeDirection(1, -90, 40) == 1, "swipe up advances");
+    require(pageSwipeDirection(1, 90, 40) == -1, "swipe down goes back");
+    require(pageSwipeDirection(100, 60, 40) == 0 && pageSwipeDirection(0, 20, 40) == 0, "ignore horizontal and small gestures");
     QTemporaryDir tmp;
     require(tmp.isValid(), "temporary directory");
     const QString root = tmp.path() + "/onboard";
@@ -82,6 +86,17 @@ int main(int argc, char **argv) {
     require(!safeLocalPath(root, root + "/dangling", true), "dangling link rejected");
     require(!safeCopyTree(root, root + "/Books"), "nested link prevents copy");
     require(safeCopyTree(root, root + "/Excluded"), "ordinary folder can be copied");
+    const QString homeFile = tmp.path() + "/home";
+    require(readHomeFolder(root, homeFile) == root, "missing home falls back");
+    require(writeHomeFolder(root, homeFile, root + "/Books"), "save home");
+    require(readHomeFolder(root, homeFile) == root + "/Books", "load home");
+    require(!writeHomeFolder(root, homeFile, root + "/outside"), "reject symlink home");
+    require(!writeHomeFolder(root, homeFile, root + "/Books/book.epub"), "reject file home");
+    require(!writeHomeFolder(root, homeFile, tmp.path()), "reject outside home");
+    require(readHomeFolder(root, homeFile) == root + "/Books", "failed writes preserve home");
+    writeFile(homeFile, (root + "/missing").toUtf8());
+    require(readHomeFolder(root, homeFile) == root, "missing saved folder falls back");
+    require(resetHomeFolder(homeFile) && readHomeFolder(root, homeFile) == root, "reset home");
     const QString trash = root + "/.kobrowse_trash";
     require(QDir().mkpath(trash + "/nested"), "trash folder");
     writeFile(trash + "/nested/book", "trash");

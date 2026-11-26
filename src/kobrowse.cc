@@ -63,6 +63,7 @@
 #include "file_mutations.h"
 #include "zip_writer.h"
 #include "pagination.h"
+#include "home_folder.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -71,6 +72,7 @@ static const char *KOBROWSE_ROOT    = "/mnt/onboard";   // выше этой п�
 static const char *KOBROWSE_TRIGGER = "/tmp/kobrowse.open"; // файл-сигнал от NickelMenu
 static const char *KOBROWSE_DIAG    = "/tmp/kobrowse.diag"; // сигнал: диагностика шрифтов интерфейса Nickel
 static double SCREEN_DPI = 300;        // плотность экрана; уточняется по устройству в loadConfig (Clara HD — 300)
+static const char *KOBROWSE_HOME = "/mnt/onboard/.adds/kobrowse/home_path";
 static const char *KOBROWSE_INI     = "/mnt/onboard/.adds/kobrowse/kobrowse.ini"; // настройки, читаются при каждом открытии
 static const int   LOG_TAPS     = 30;  // отладка: сколько касаний записать в лог
 static const int   SWIPE_PX     = 40;  // сдвиг пальца больше этого — перетаскивание, а не нажатие
@@ -454,13 +456,13 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         break;
     }
     case I_CHEV_UP: {
-        QPolygonF a; a << QPointF(6, 15) << QPointF(12, 9) << QPointF(18, 15);
-        p->drawPolyline(a);
+        QPolygonF a; a << QPointF(3, 17) << QPointF(12, 5) << QPointF(21, 17);
+        p->setPen(Qt::NoPen); p->setBrush(c); p->drawPolygon(a);
         break;
     }
     case I_CHEV_DOWN: {
-        QPolygonF a; a << QPointF(6, 9) << QPointF(12, 15) << QPointF(18, 9);
-        p->drawPolyline(a);
+        QPolygonF a; a << QPointF(3, 7) << QPointF(12, 19) << QPointF(21, 7);
+        p->setPen(Qt::NoPen); p->setBrush(c); p->drawPolygon(a);
         break;
     }
     case I_EYE:
@@ -553,7 +555,8 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         const QColor ink = isEnabled() ? QColor(Qt::black) : QColor(165, 165, 165);
-        const int size = qMin(ICON_PX, qMin(height() - 8, width() - 8));
+        const int iconSize = (m_icon == I_CHEV_UP || m_icon == I_CHEV_DOWN) ? qRound(ICON_PX * 1.6) : ICON_PX;
+        const int size = qMin(iconSize, qMin(height() - 8, width() - 8));
         if (size <= 0) return;
         const int left = m_text.isEmpty() ? (width() - size) / 2 : 4;
         drawIcon(&p, m_icon, QRectF(left, (height() - size) / 2, size, size), ink);
@@ -2289,8 +2292,21 @@ static const SetItem SET_ITEMS[] = {
     { "show_hidden",   "Скрытые файлы",          S_BOOL, 0,   0,   1,    0 },
     { "scale_pct",     "Масштаб, %",             S_NUM,  5,   50,  200,  0 },
     { "open_books",    "Открытие книг",          S_OPEN, 0,   0,   0,    0 },
+    { "opds_key_pt", "Кегль клавиш OPDS, пт", S_NUM, 0.5, 5, 20, 1 },
+    { "opds_func_pt", "Кегль служебных клавиш OPDS, пт", S_NUM, 0.5, 3, 10, 1 },
+    { "key_font_pt", "Кегль клавиш поиска, пт (0 — авто)", S_NUM, 0.5, 0, 24, 1 },
+    { "func_pt", "Кегль служебных клавиш поиска, пт (0 — авто)", S_NUM, 0.5, 0, 24, 1 },
+    { "search_list_pt", "Кегль результатов поиска, пт", S_NUM, 0.5, 4, 24, 1 },
+    { "search_list_font", "Гарнитура результатов поиска", S_FONT, 0, 0, 0, 0 },
 };
 static const int SET_COUNT = int(sizeof(SET_ITEMS) / sizeof(SET_ITEMS[0]));
+static bool isFontSetting(int i) {
+    const QString key = QString::fromLatin1(SET_ITEMS[i].key);
+    return key == u8("list_pt") || key == u8("list_font") || key == u8("btn_pt")
+        || key == u8("btn_font") || key == u8("info_pt") || key == u8("opds_key_pt")
+        || key == u8("opds_func_pt") || key == u8("key_font_pt") || key == u8("func_pt")
+        || key == u8("search_list_pt") || key == u8("search_list_font");
+}
 
 // Записать значения в kobrowse.ini: строка «ключ=…» заменяется, комментарии сохраняются
 static bool saveConfig(const QStringList &keys, const QStringList &vals) {
@@ -2331,6 +2347,7 @@ public:
         : QWidget(parent),
           m_root(u8(KOBROWSE_ROOT)), m_trash(u8(KOBROWSE_TRASH)), m_path(m_root), m_showHidden(SHOW_HIDDEN)
     {
+        m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME));
         setAttribute(Qt::WA_DeleteOnClose);     // при закрытии окно удаляется из памяти
         setAttribute(Qt::WA_AcceptTouchEvents); // Nickel шлёт касания как QTouchEvent, не как мышь
         setAutoFillBackground(true);            // непрозрачный фон поверх Nickel
@@ -2353,12 +2370,14 @@ public:
         QHBoxLayout *toolbar = new QHBoxLayout(m_toolbar);
         toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(GAP);
         ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar);
-        back->setFont(fBtn); back->setMinimumHeight(BTN_HEIGHT);
+        QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(12 * SCREEN_DPI / 72.0)));
+        back->setFont(backFont); back->setMinimumHeight(qMax(48, BTN_HEIGHT / 2));
         toolbar->addWidget(back, 1);
         ChromeButton *find = new ChromeButton(I_SEARCH, QString(), m_toolbar);
         ChromeButton *settings = new ChromeButton(I_MORE, QString(), m_toolbar);
         find->setAccessibleName(u8("Поиск")); settings->setAccessibleName(u8("Настройки"));
-        find->setFixedSize(BTN_HEIGHT, BTN_HEIGHT); settings->setFixedSize(BTN_HEIGHT, BTN_HEIGHT);
+        const int chromeHeight = qMax(48, BTN_HEIGHT / 2);
+        find->setFixedSize(chromeHeight, chromeHeight); settings->setFixedSize(chromeHeight, chromeHeight);
         toolbar->addWidget(find); toolbar->addWidget(settings);
         connect(back, &QPushButton::clicked, [this]() { close(); });
         connect(find, &QPushButton::clicked, [this]() { ksearch_open(); });
@@ -2367,7 +2386,8 @@ public:
 
         // Текущий путь остаётся видимым при прокрутке списка.
         m_pathLabel = new QLabel(this);
-        m_pathLabel->setFont(fMsg);
+        QFont pathFont = fMsg; pathFont.setPixelSize(qRound(FONT_MSG * 1.4));
+        m_pathLabel->setFont(pathFont);
         m_pathLabel->setWordWrap(true);
         m_pathLabel->setTextFormat(Qt::PlainText);
         lay->addWidget(m_pathLabel);
@@ -2523,7 +2543,7 @@ public:
         m_next = new ChromeButton(I_CHEV_DOWN, QString(), m_nav);
         m_prev->setAccessibleName(u8("Предыдущая страница"));
         m_next->setAccessibleName(u8("Следующая страница"));
-        m_prev->setFixedSize(BTN_HEIGHT, BTN_HEIGHT); m_next->setFixedSize(BTN_HEIGHT, BTN_HEIGHT);
+        m_prev->setFixedSize(chromeHeight, chromeHeight); m_next->setFixedSize(chromeHeight, chromeHeight);
         footer->addWidget(m_prev); footer->addWidget(m_next);
         m_pageLabel = new QLabel(m_nav); m_pageLabel->setFont(fMsg);
         footer->addWidget(m_pageLabel);
@@ -2536,7 +2556,9 @@ public:
         connect(m_prev, &QPushButton::clicked, [bar]() { bar->triggerAction(QAbstractSlider::SliderPageStepSub); });
         connect(m_next, &QPushButton::clicked, [bar]() { bar->triggerAction(QAbstractSlider::SliderPageStepAdd); });
         connect(bar, &QScrollBar::valueChanged, this, [this](int) { updatePageInfo(); });
-        connect(bar, &QScrollBar::rangeChanged, this, [this](int, int) { updatePageInfo(); });
+        m_pageTimer.setSingleShot(true);
+        connect(&m_pageTimer, &QTimer::timeout, this, [this]() { updatePageInfo(); });
+        connect(bar, &QScrollBar::rangeChanged, this, [this](int, int) { m_pageTimer.start(0); });
 
         // Страховка 1: закрыть после IDLE_MS без касаний
         m_idle.setSingleShot(true);
@@ -2611,6 +2633,7 @@ protected:
             m_twoFinger = false;
             m_holdFired = false;
             m_holdPath.clear(); m_holdBlank = false;
+            m_swipeList = false;
             m_holdTimer.stop();
             m_menuTouch = m_actions->isVisible()
                 && m_actions->viewport()->rect().contains(m_actions->viewport()->mapFrom(this, p));
@@ -2625,6 +2648,7 @@ protected:
                 m_scrollStart = m_list->verticalScrollBar()->value();
             }
             if (pts.size() == 1 && !m_menuTouch && !m_confirm->isVisible() && inList(p)) {
+                m_swipeList = !m_actions->isVisible();
                 QTreeWidgetItem *item = m_list->itemAt(m_list->viewport()->mapFrom(this, p));
                 if (item && !item->data(0, ROLE_PARENT).toBool()) {
                     m_holdPath = item->data(0, ROLE_PATH).toString();
@@ -2667,7 +2691,12 @@ protected:
         case QEvent::TouchEnd: {
             m_holdTimer.stop(); m_holdPath.clear();
             if (m_twoFinger && m_tapLog > 0) { --m_tapLog; klog(u8("two-finger scroll")); }
-            if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired) tapAt(p, false);
+            if (!pts.isEmpty() && !m_twoFinger && m_moved && !m_holdFired && m_swipeList) {
+                const QPoint delta = p - m_pressPos;
+                const int direction = pageSwipeDirection(delta.x(), delta.y(), SWIPE_PX);
+                if (direction) m_list->verticalScrollBar()->triggerAction(direction > 0
+                        ? QAbstractSlider::SliderPageStepAdd : QAbstractSlider::SliderPageStepSub);
+            } else if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired) tapAt(p, false);
             m_twoFinger = false;
             break;
         }
@@ -2687,6 +2716,11 @@ protected:
         if (m_list) m_list->doItemsLayout();
         placeActionMenu();
         fitButtonFont();
+        m_pageTimer.start(0);
+    }
+    void showEvent(QShowEvent *e) override {
+        QWidget::showEvent(e);
+        m_pageTimer.start(0);
     }
 
 private:
@@ -2892,7 +2926,7 @@ private:
         ensureMarkedVisible();
     }
 
-    enum MenuAction { ActCopy, ActCut, ActDelete, ActInfo, ActZip, ActClear,
+    enum MenuAction { ActCopy, ActCut, ActDelete, ActInfo, ActZip, ActHome, ActClear,
                       ActPaste, ActDrop, ActClose };
 
     void addMenuOption(const QString &label, MenuAction action) {
@@ -2920,7 +2954,11 @@ private:
             addMenuOption(u8("Вырезать"), ActCut);
             addMenuOption((TRASH_ENABLED && !pathWithin(m_path, m_trash))
                           ? u8("В корзину") : u8("Удалить"), ActDelete);
-            if (m_marked.size() == 1) addMenuOption(u8("Сведения"), ActInfo);
+            if (m_marked.size() == 1) {
+                addMenuOption(u8("Сведения"), ActInfo);
+                const QString selectedPath = *m_marked.begin();
+                if (validHomeFolder(m_root, selectedPath)) addMenuOption(u8("Сделать домашней"), ActHome);
+            }
             addMenuOption(u8("Создать ZIP-архив"), ActZip);
             addMenuOption(u8("Снять выбор"), ActClear);
         }
@@ -2946,6 +2984,12 @@ private:
             break;
         case ActInfo: showInfo(); break;
         case ActZip: zipSelected(); break;
+        case ActHome:
+            if (m_marked.size() == 1 && writeHomeFolder(m_root, u8(KOBROWSE_HOME), *m_marked.begin())) {
+                m_marked.clear(); m_selectionOrder.clear(); load();
+                showMessage(u8("Домашняя папка сохранена"));
+            } else showMessage(u8("Не удалось сохранить домашнюю папку"));
+            break;
         case ActClear: m_marked.clear(); m_selectionOrder.clear(); load(); break;
         case ActPaste: paste(); break;
         case ActDrop: m_clip.clear(); updateActions(); break;
@@ -3173,17 +3217,17 @@ private:
         }
         m_list->scrollToTop();
         m_list->doItemsLayout();
-        updatePageInfo();
+        m_pageTimer.start(0);
     }
 
     void updatePageInfo() {
         if (!m_pageLabel || !m_countLabel || !m_prev || !m_next || !m_list) return;
         QScrollBar *bar = m_list->verticalScrollBar();
-        const PageState page = pageState(bar->value(), bar->maximum(), bar->pageStep());
+        const PageState page = pageState(bar->value(), bar->maximum(), m_list->viewport()->height());
         m_prev->setEnabled(page.previous); m_next->setEnabled(page.next);
         m_prev->update(); m_next->update();
         m_pageLabel->setText(u8("%1 / %2").arg(page.current).arg(page.total));
-        m_countLabel->setText(u8("Файлов: %1  Папок: %2").arg(m_fileCount).arg(m_dirCount));
+        m_countLabel->setText(u8("файлов: %1  папок: %2").arg(m_fileCount).arg(m_dirCount));
     }
 
     // Нажатие на строку: папка — войти; файлы — открытие на следующем этапе
@@ -3330,6 +3374,12 @@ private:
         QLabel *title = new QLabel(u8("Настройки"), m_settings);
         QFont titleFont = fText; titleFont.setBold(true); title->setFont(titleFont);
         v->addWidget(title);
+        QHBoxLayout *tabs = new QHBoxLayout();
+        m_generalTab = makeButton(tabs, fBtn, "Общие", qMax(40, BTN_HEIGHT / 2), 1);
+        m_fontTab = makeButton(tabs, fBtn, "Шрифты", qMax(40, BTN_HEIGHT / 2), 1);
+        v->addLayout(tabs);
+        connect(m_generalTab, &QPushButton::clicked, [this]() { setSettingsTab(false); });
+        connect(m_fontTab, &QPushButton::clicked, [this]() { setSettingsTab(true); });
 
         m_settingsScroll = new QScrollArea(m_settings);
         m_settingsScroll->setWidgetResizable(true);
@@ -3341,18 +3391,31 @@ private:
         rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(0);
         const double sc = SCREEN_DPI / 300.0;
         const int rowH = qMax(36, qRound(70 * sc));
+        m_generalBlock = new QWidget(content);
+        QVBoxLayout *general = new QVBoxLayout(m_generalBlock);
+        general->setContentsMargins(0, 0, 0, 0); general->setSpacing(0);
         QLabel *trashHeading = new QLabel(u8("Корзина"), content);
-        trashHeading->setFont(titleFont); rows->addWidget(trashHeading);
+        trashHeading->setFont(titleFont); general->addWidget(trashHeading);
         QHBoxLayout *trashRow = new QHBoxLayout();
         QPushButton *open = makeButton(trashRow, fBtn, "Открыть корзину", rowH, 1);
         QPushButton *empty = makeButton(trashRow, fBtn, "Очистить корзину", rowH, 1);
-        rows->addLayout(trashRow);
+        general->addLayout(trashRow);
+        QHBoxLayout *homeRow = new QHBoxLayout();
+        QPushButton *resetHome = makeButton(homeRow, fBtn, "Сбросить домашнюю папку", rowH, 1);
+        general->addLayout(homeRow);
+        rows->addWidget(m_generalBlock);
+        connect(resetHome, &QPushButton::clicked, [this]() {
+            if (resetHomeFolder(u8(KOBROWSE_HOME))) showMessage(u8("Домашняя папка сброшена"));
+            else showMessage(u8("Не удалось сбросить домашнюю папку"));
+        });
         connect(open, &QPushButton::clicked, [this]() { showSettings(false); openTrash(); });
         connect(empty, &QPushButton::clicked, [this]() { showSettings(false); requestDeletion(2); });
         int trashIndex = -1;
         for (int i = 0; i < SET_COUNT; ++i) {
             m_setLabels << static_cast<QLabel *>(nullptr);
             m_switches << static_cast<SettingSwitch *>(nullptr);
+            m_settingRows << static_cast<QWidget *>(nullptr);
+            m_settingLines << static_cast<QWidget *>(nullptr);
             if (QString::fromLatin1(SET_ITEMS[i].key) == u8("trash_enabled")) trashIndex = i;
         }
         QVector<int> order;
@@ -3360,10 +3423,6 @@ private:
         for (int i = 0; i < SET_COUNT; ++i) if (i != trashIndex) order << i;
         for (int position = 0; position < order.size(); ++position) {
             const int i = order.at(position);
-            if (position == 1 || (position == 0 && trashIndex < 0)) {
-                QLabel *generalHeading = new QLabel(u8("Параметры"), content);
-                generalHeading->setFont(titleFont); rows->addWidget(generalHeading);
-            }
             QWidget *line = new QWidget(content);
             line->setMinimumHeight(rowH);
             QHBoxLayout *r = new QHBoxLayout(line);
@@ -3389,9 +3448,11 @@ private:
             rows->addWidget(line);
             QFrame *separator = new QFrame(content); separator->setFrameShape(QFrame::HLine);
             separator->setStyleSheet(u8("color:#b0b0b0;")); rows->addWidget(separator);
+            m_settingRows[i] = line; m_settingLines[i] = separator;
         }
         rows->addStretch(1);
         m_settingsScroll->setWidget(content); v->addWidget(m_settingsScroll, 1);
+        setSettingsTab(false);
         QHBoxLayout *bottom = new QHBoxLayout(); bottom->setSpacing(GAP);
         QPushButton *bSave = makeButton(bottom, fBtn, "Сохранить", BTN_HEIGHT, 1);
         QPushButton *bDef = makeButton(bottom, fBtn, "По умолчанию", BTN_HEIGHT, 1);
@@ -3405,6 +3466,17 @@ private:
         connect(bCanc, &QPushButton::clicked, [this]() { showSettings(false); });
         m_settings->hide();
         m_fonts << QString() << QFontDatabase().families();
+    }
+
+    void setSettingsTab(bool fonts) {
+        m_generalBlock->setVisible(!fonts);
+        for (int i = 0; i < SET_COUNT; ++i) {
+            m_settingRows[i]->setVisible(isFontSetting(i) == fonts);
+            m_settingLines[i]->setVisible(isFontSetting(i) == fonts);
+        }
+        m_generalTab->setEnabled(fonts); m_fontTab->setEnabled(!fonts);
+        m_generalTab->update(); m_fontTab->update();
+        m_settingsScroll->verticalScrollBar()->setValue(0);
     }
 
     void showSettings(bool on) {
@@ -3427,6 +3499,7 @@ private:
                 m_setVals << v;
             }
             refreshSettings();
+            setSettingsTab(false);
         }
         m_list->setVisible(!on);
         m_pathLabel->setVisible(!on);
@@ -3535,12 +3608,12 @@ private:
     bool          m_showHidden;
     bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
-    QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom, m_holdTimer;
+    QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom, m_holdTimer, m_pageTimer;
     QString       m_holdPath;
     QStringList   m_deleteSnapshot;
     bool          m_menuTouch = false;
     int           m_menuScrollStart = 0;
-    bool          m_holdFired = false, m_holdBlank = false, m_menuRequested = false;
+    bool          m_holdFired = false, m_holdBlank = false, m_menuRequested = false, m_swipeList = false;
     int           m_pendingDelete = 0;
     QPoint        m_pressPos;
     int           m_scrollStart = 0;
@@ -3571,6 +3644,9 @@ private:
     QLabel *m_pageLabel = nullptr, *m_countLabel = nullptr;
     int m_fileCount = 0, m_dirCount = 0;
     QScrollArea *m_settingsScroll = nullptr;
+    QWidget *m_generalBlock = nullptr;
+    QPushButton *m_generalTab = nullptr, *m_fontTab = nullptr;
+    QVector<QWidget *> m_settingRows, m_settingLines;
     QVector<SettingSwitch *> m_switches;
     bool m_settingsTouch = false;
     int m_settingsScrollStart = 0;
@@ -3581,6 +3657,46 @@ private:
 static QPointer<KobrowseWindow> g_win;          // одно окно на всё время работы
 static QFileSystemWatcher  *g_watch = nullptr;
 static QTimer              *g_poll = nullptr;  // страховка: inotify на /tmp иногда молчит
+
+// Kobalt listens to PlugManager::plugged and N3PowerWorkflowManager::aboutToSleep.
+// Do not hook the same power/USB PLT entries: NickelHook replaces, rather than chains,
+// another plugin's hook (notably Kobalt's shutdown save/drain).
+static QTimer *g_lifecycleClose = nullptr;
+static QPointer<QObject> g_plugManager, g_powerManager;
+static void closeForLifecycle() {
+    if (g_reopen) g_reopen->stop();
+    if (g_search) g_search->close();
+    if (g_opds) g_opds->close();
+    if (g_win) g_win->close();
+}
+static void setupLifecycleSignals() {
+    typedef QObject *(*Manager)();
+    Manager plug = nsym<Manager>("_ZN11PlugManager14sharedInstanceEv");
+    Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
+    QObject *p = plug ? plug() : nullptr;
+    QObject *w = power ? power() : nullptr;
+    if (p && p != g_plugManager) {
+        g_plugManager = p;
+        QObject::connect(p, SIGNAL(plugged()), g_lifecycleClose, SLOT(start()), Qt::AutoConnection);
+    }
+    if (w && w != g_powerManager) {
+        g_powerManager = w;
+        QObject::connect(w, SIGNAL(aboutToSleep()), g_lifecycleClose, SLOT(start()), Qt::AutoConnection);
+    }
+    // Fallback if a signal was missed, using the same optional Nickel queries as Kobalt.
+    typedef const void *(*GetManager)();
+    typedef bool (*Query)(const void *);
+    GetManager usbWorkflow = nsym<GetManager>("_ZN19PlugWorkflowManager14sharedInstanceEv");
+    Query usbVisible = nsym<Query>("_ZN19PlugWorkflowManager20pluggedInViewVisibleEv");
+    GetManager powerWorkflow = nsym<GetManager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
+    Query sleeping = nsym<Query>("_ZNK22N3PowerWorkflowManager8sleepingEv");
+    Query sleepVisible = nsym<Query>("_ZNK22N3PowerWorkflowManager16sleepViewVisibleEv");
+    const void *usb = usbWorkflow ? usbWorkflow() : nullptr;
+    const void *pm = powerWorkflow ? powerWorkflow() : nullptr;
+    if ((usb && usbVisible && usbVisible(usb)) ||
+        (pm && ((sleeping && sleeping(pm)) || (sleepVisible && sleepVisible(pm)))))
+        closeForLifecycle();
+}
 
 // Главное окно Nickel. MWC_currentView на главном экране может вернуть nullptr —
 // тогда activeWindow() и, на крайний случай, любой видимый виджет верхнего уровня.
@@ -3758,6 +3874,7 @@ static void kobrowse_font_diag() {
 // Проверка файлов-сигналов. Вызывается и из inotify, и по таймеру-страховке:
 // на Clara inotify на /tmp иногда не приходит после долгого сна — пункт молчал.
 static void checkKobrowseTriggers() {
+    setupLifecycleSignals();
     if (QFile::exists(u8(KOBROWSE_TRIGGER))) { QFile::remove(u8(KOBROWSE_TRIGGER)); kobrowse_open(); }
     if (QFile::exists(u8(OPDS_TRIGGER))) { QFile::remove(u8(OPDS_TRIGGER)); opds_open(); }
     if (QFile::exists(u8(KSEARCH_TRIGGER))) { QFile::remove(u8(KSEARCH_TRIGGER)); ksearch_open(); }
@@ -3777,6 +3894,11 @@ static int kobrowse_init() {
         nh_log("no QApplication at init, trigger disabled");
         return 0;
     }
+    g_lifecycleClose = new QTimer();
+    g_lifecycleClose->setSingleShot(true); g_lifecycleClose->setInterval(0);
+    QObject::connect(g_lifecycleClose, &QTimer::timeout, []() { closeForLifecycle(); });
+    QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, []() { closeForLifecycle(); });
+    setupLifecycleSignals();
     // inotify на /tmp — основной путь; таймер раз в 700 мс — страховка от пропущенного сигнала
     g_watch = new QFileSystemWatcher(QStringList() << u8("/tmp"));
     QObject::connect(g_watch, &QFileSystemWatcher::directoryChanged,
