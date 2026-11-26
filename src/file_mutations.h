@@ -23,10 +23,34 @@ inline bool removeTreeNoFollow(const QString &root, const QString &path) {
 
 // Deleting items from the trash is allowed, but never the trash root itself.
 inline bool mayDeleteLocalEntry(const QString &root, const QString &trash, const QString &path) {
-    if (path == trash) return false;
-    if (pathWithin(path, trash))
-        return safeLocalPath(root, trash) && safeLocalPath(root, QFileInfo(path).absolutePath());
-    return !protectedLocalPath(root, path) && safeLocalPath(root, path);
+    const QString cleanTrash = QDir::cleanPath(QFileInfo(trash).absoluteFilePath());
+    const QString cleanPath = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    if (cleanPath == cleanTrash) return false;
+    if (pathWithin(cleanPath, cleanTrash))
+        return safeLocalPath(root, cleanTrash) && safeLocalPath(root, QFileInfo(cleanPath).absolutePath());
+    return !protectedLocalPath(root, cleanPath) && safeLocalPath(root, cleanPath);
+}
+
+// Moves may target the normal user area, or the trash root for a trash action.
+// The explicit trash exception never permits moving a protected source.
+inline bool moveLocalEntry(const QString &root, const QString &source, const QString &dest,
+                           QString &error, bool toTrash = false) {
+    const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
+    const QString src = QDir::cleanPath(QFileInfo(source).absoluteFilePath());
+    const QString dst = QDir::cleanPath(QFileInfo(dest).absoluteFilePath());
+    const QString parent = QFileInfo(dst).absolutePath();
+    const QString trash = base + QLatin1String("/.kobrowse_trash");
+    const bool trashTarget = toTrash && parent == trash;
+    if (!safeLocalPath(base, src) || protectedLocalPath(base, src)
+        || !safeLocalPath(base, parent) || !QFileInfo(parent).isDir()
+        || (protectedLocalPath(base, parent) && parent != base && !trashTarget)
+        || (!trashTarget && protectedLocalPath(base, dst))
+        || !safeLocalPath(base, dst, true) || QFileInfo(dst).exists() || QFileInfo(dst).isSymLink()
+        || (QFileInfo(src).isDir() && pathWithin(parent, src))) {
+        error = QString::fromUtf8("Источник или место назначения защищены или недоступны"); return false;
+    }
+    if (!QDir().rename(src, dst)) { error = QString::fromUtf8("Не удалось переместить файл"); return false; }
+    return true;
 }
 
 inline bool cleanupAppInstall(const QString &root) {
@@ -77,6 +101,7 @@ inline bool copyStagedTree(const QString &root, const QString &src, const QStrin
     const QString parent = target.absolutePath();
     if (!safeCopyTree(root, src) || !safeLocalPath(root, parent) || !QFileInfo(parent).isDir()
         || (protectedLocalPath(root, parent) && parent != root)
+        || protectedLocalPath(root, dst)
         || !safeLocalPath(root, dst, true) || target.exists() || target.isSymLink()
         || (source.isDir() && pathWithin(parent, source.absoluteFilePath()))) {
         error = QString::fromUtf8("Источник или место назначения недоступны"); return false;
@@ -115,7 +140,8 @@ inline bool renameLocalEntry(const QString &root, const QString &source, const Q
     const QFileInfo fi(source);
     const QString dest = fi.absolutePath() + QLatin1Char('/') + name;
     if (dest == source) return true;
-    if (!safeLocalPath(root, dest, true) || QFileInfo(dest).exists() || QFileInfo(dest).isSymLink()) {
+    if (protectedLocalPath(root, dest) || !safeLocalPath(root, dest, true)
+        || QFileInfo(dest).exists() || QFileInfo(dest).isSymLink()) {
         error = QString::fromUtf8("Имя уже занято или недоступно"); return false;
     }
     if (!QDir().rename(source, dest)) { error = QString::fromUtf8("Не удалось переименовать"); return false; }

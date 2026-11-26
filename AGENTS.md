@@ -35,7 +35,10 @@
   компилирует и проверяет реальные функции списка и правил путей. Запустите
   также `bash tests/run-pagination-ui-tests.sh` для невидимой проверки целых
   строк страниц (Qt 5 Widgets, платформа offscreen) и `bash tests/run-zip-tests.sh` для проверки реального ZIP-писателя
-  стандартным Python `zipfile` (нужны Qt 5 и zlib).
+  стандартным Python `zipfile` (нужны Qt 5 и zlib). Для проверки защит на FAT
+  запустите `bash tests/run-fat-policy-tests.sh`: нужны dosfstools, Qt 5,
+  `pkg-config`, `sudo` без пароля и возможность монтировать временный loop-образ.
+  Скрипт использует только созданный им изолированный образ, не устройства.
 - Локальная кросс-сборка при наличии Docker и SDK:
   `bash scripts/build-kobo.sh`. Субмодуль должен быть инициализирован; скрипт
   запускает `make -B all`, затем `make package` в образе

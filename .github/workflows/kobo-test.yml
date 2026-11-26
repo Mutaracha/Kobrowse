@@ -18,9 +18,11 @@ jobs:
           persist-credentials: false
           submodules: true
       - name: Install Qt 5 for filesystem tests
-        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y qtbase5-dev pkg-config zlib1g-dev dosfstools
       - name: Test filesystem policies
         run: bash tests/run-file-policy-tests.sh
+      - name: Test protected folders on disposable FAT image
+        run: bash tests/run-fat-policy-tests.sh
       - name: Test whole-row pagination (offscreen)
         run: bash tests/run-pagination-ui-tests.sh
       - name: Test ZIP creation

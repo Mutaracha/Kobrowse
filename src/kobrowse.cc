@@ -66,6 +66,7 @@
 #include "pagination.h"
 #include "home_folder.h"
 #include "action_menu.h"
+#include "item_style.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -256,7 +257,8 @@ static const int ROLE_PATH = Qt::UserRole,     // полный путь
                  ROLE_DIR  = Qt::UserRole + 1, // это папка
                  ROLE_MARK = Qt::UserRole + 2, // строка отмечена
                  ROLE_DETAIL = Qt::UserRole + 4, // дата и размер
-                 ROLE_PARENT = Qt::UserRole + 5; // специальная строка «..»
+                 ROLE_PARENT = Qt::UserRole + 5, // специальная строка «..»
+                 ROLE_READONLY = Qt::UserRole + 6; // защита от операций
 
 // Разбивка текста на строки по ширине: по словам, а слово длиннее строки — где угодно.
 // Возвращает высоту; если painter задан — ещё и рисует.
@@ -298,7 +300,8 @@ public:
         const QColor ink = mark ? Qt::white : Qt::black;
         p->save();
         p->fillRect(opt.rect, mark ? Qt::black : Qt::white);
-        p->setPen(QPen(ink, qMax(1, m_font.pixelSize() / 16)));
+        p->setPen(QPen(itemIconColor(idx.data(ROLE_READONLY).toBool(), mark),
+                       qMax(1, m_font.pixelSize() / 16)));
         p->setBrush(Qt::NoBrush);
         const int sz = iconSize();
         const QRectF r(opt.rect.left() + PAD_H, opt.rect.top() + PAD_V, sz, sz);
@@ -2922,6 +2925,11 @@ private:
         if (!it || it->data(0, ROLE_PARENT).toBool()) return;
         const QString path = it->data(0, ROLE_PATH).toString();
         if (path.isEmpty()) return;
+        if (readOnlyLocalEntry(m_root, m_trash, path)) {
+            if (m_marked.isEmpty()) m_menuRequested = false;
+            showMessage(u8("Защищённые элементы доступны только для просмотра"));
+            return;
+        }
         const bool on = !m_marked.contains(path);
         if (on) { m_marked.insert(path); m_selectionOrder << path; }
         else { m_marked.remove(path); m_selectionOrder.removeAll(path); }
@@ -3063,8 +3071,7 @@ private:
             const QString dst = uniqueName(m_path, fi.fileName(), isDir);
             bool ok;
             if (m_clipCut) {
-                ok = QDir().rename(src, dst);
-                if (!ok) err = u8("Не удалось переместить ") + fi.fileName();
+                ok = moveLocalEntry(m_root, src, dst, err);
             } else {
                 ok = copyStagedTree(m_root, src, dst, err);
             }
@@ -3153,7 +3160,8 @@ private:
             if (isProtected(src) || !safeLocalPath(m_root, src)) { remaining.insert(src); continue; }
             const QFileInfo fi(src);
             const QString dst = uniqueName(m_trash, stamp + fi.fileName(), fi.isDir());
-            if (!QDir().rename(src, dst)) remaining.insert(src);
+            QString error;
+            if (!moveLocalEntry(m_root, src, dst, error, true)) remaining.insert(src);
             else m_clip.removeAll(src);
         }
         ::sync();
@@ -3229,9 +3237,12 @@ private:
             QString detail = fi.lastModified().toString(u8("dd.MM.yyyy hh:mm"));
             if (!isDir && !fi.isSymLink()) detail += u8("  ·  ") + humanSize(fi.size());
             if (fi.isSymLink()) detail += u8("  ·  → ") + fi.symLinkTarget();
+            const bool readOnly = readOnlyLocalEntry(m_root, m_trash, path);
+            if (readOnly) detail += u8("  ·  защищено");
             it->setData(0, ROLE_DETAIL, detail);
             it->setData(0, ROLE_PATH, path);
             it->setData(0, ROLE_DIR, isDir);
+            it->setData(0, ROLE_READONLY, readOnly);
             if (m_marked.contains(path)) setMarkedLook(it, true);
         }
         m_list->scrollToTop();

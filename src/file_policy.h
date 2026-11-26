@@ -103,6 +103,15 @@ inline bool protectedLocalPath(const QString &root, const QString &path) {
     return false;
 }
 
+// Trash contents remain selectable for deletion; the trash directory itself
+// and other protected entries can only be browsed, not selected for mutation.
+inline bool readOnlyLocalEntry(const QString &root, const QString &trash, const QString &path) {
+    const QString item = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+    const QString bin = QDir::cleanPath(QFileInfo(trash).absoluteFilePath());
+    const bool insideTrash = item != bin && pathWithin(item, bin);
+    return protectedLocalPath(root, item) && !insideTrash;
+}
+
 // Preflight copies before creating anything; never follow links, including nested ones.
 inline bool safeCopyTree(const QString &root, const QString &path) {
     if (!safeLocalPath(root, path)) return false;

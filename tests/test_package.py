@@ -45,7 +45,7 @@ class PackageTest(unittest.TestCase):
     def test_rejects_invalid_members_and_content(self):
         plugin = './usr/local/Kobo/imageformats/libkobrowse.so'
         menu = './mnt/onboard/.adds/nm/kobrowse'
-        cases = ('extra', 'missing', 'duplicate', 'symlink', 'mode', 'owner',
+        cases = ('extra', 'fat_fixture', 'missing', 'duplicate', 'symlink', 'mode', 'owner',
                  'wrong_binary', 'wrong_arch', 'wrong_menu')
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
@@ -54,6 +54,8 @@ class PackageTest(unittest.TestCase):
                     files = [(plugin, ARM_SO), (menu, b'touch /tmp/kobrowse.open')]
                     if case == 'extra':
                         files.append(('./unexpected', b'x'))
+                    elif case == 'fat_fixture':
+                        files.append(('./build/fat-test/fixture.img', b'fixture'))
                     elif case == 'missing':
                         files.pop()
                     elif case == 'duplicate':

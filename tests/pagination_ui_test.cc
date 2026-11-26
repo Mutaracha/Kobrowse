@@ -1,5 +1,6 @@
 #include "../src/pagination.h"
 #include "../src/action_menu.h"
+#include "../src/item_style.h"
 #include <QApplication>
 #include <QTreeWidget>
 #include <QScrollBar>
@@ -20,6 +21,9 @@ static void require(bool ok, const char *message) {
 }
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
+    require(itemIconColor(true, false) == QColor(135, 135, 135), "protected icon is grey");
+    require(itemIconColor(false, false) == QColor(Qt::black), "ordinary icon is black");
+    require(itemIconColor(false, true) == QColor(Qt::white), "selected icon is white");
     QTreeWidget menu;
     menu.setColumnCount(1); menu.setHeaderHidden(true);
     int inserted = 0, removed = 0;

@@ -167,6 +167,32 @@ int main(int argc, char **argv) {
                       (trash + "/nested/link").toLocal8Bit().constData()) == 0, "trash link");
     require(!mayDeleteLocalEntry(root, trash, trash), "trash root cannot be deleted");
     require(!mayDeleteLocalEntry(root, trash, root + "/.kobo/Kobo"), "system folder cannot be deleted");
+    require(!mayDeleteLocalEntry(root, trash, trash + "/../.kobo"), "trash traversal cannot bypass system protection");
+    require(!mayDeleteLocalEntry(root, trash, trash + "/nested/../.."), "trash traversal cannot delete root");
+    require(readOnlyLocalEntry(root, trash, root + "/.kobo"), "system folder shown as read-only");
+    require(readOnlyLocalEntry(root, trash, root + "/.adds/app"), "system contents shown as read-only");
+    require(readOnlyLocalEntry(root, trash, trash), "trash root shown as read-only");
+    require(!readOnlyLocalEntry(root, trash, trash + "/nested"), "trash contents remain selectable");
+    for (const QString &protectedEntry : QStringList() << root + "/.kobo" << root + "/.adds" << trash) {
+        QString error;
+        require(!mayDeleteLocalEntry(root, trash, protectedEntry), "protected folder deletion denied");
+        require(!renameLocalEntry(root, protectedEntry, "renamed-system", error), "protected folder rename denied");
+        require(!moveLocalEntry(root, protectedEntry, root + "/moved-system", error), "protected folder move denied");
+        require(!moveLocalEntry(root, protectedEntry, trash + "/protected", error, true), "protected folder trash move denied");
+        require(QFileInfo(protectedEntry).isDir(), "protected folder preserved");
+    }
+    QString moveError;
+    writeFile(root + "/to-move", "move");
+    require(moveLocalEntry(root, root + "/to-move", root + "/moved", moveError), "normal move");
+    require(moveLocalEntry(root, root + "/moved", trash + "/moved", moveError, true), "normal move to trash");
+    require(QFileInfo(trash + "/moved").exists(), "trash move retained data");
+    const QString spareRoot = tmp.path() + "/spare-root";
+    require(QDir().mkpath(spareRoot), "spare root");
+    writeFile(spareRoot + "/user", "keep");
+    require(!renameLocalEntry(spareRoot, spareRoot + "/user", ".KoBo", moveError), "rename to reserved name denied");
+    require(!moveLocalEntry(spareRoot, spareRoot + "/user", spareRoot + "/.AdDs", moveError), "move to reserved name denied");
+    require(!copyStagedTree(spareRoot, spareRoot + "/user", spareRoot + "/.KOBROWSE_TRASH", moveError), "copy to reserved name denied");
+    require(QFileInfo(spareRoot + "/user").exists(), "reserved destinations preserve source");
     require(!mayDeleteLocalEntry(root, trash, root + "/alias"), "link outside trash cannot be deleted");
     require(mayDeleteLocalEntry(root, trash, trash + "/nested"), "trash entry can be deleted");
     require(removeTreeNoFollow(root, trash + "/nested"), "remove trash tree without following links");
