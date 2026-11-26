@@ -68,6 +68,7 @@
 #include "action_menu.h"
 #include "item_style.h"
 #include "file_kind.h"
+#include "settings_model.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -161,11 +162,16 @@ static void detectDpi() {
 static void loadConfig() {
     detectDpi();                                     // разные модели Kobo — разная плотность
     const QString ini = u8(KOBROWSE_INI);
-    QDir().mkpath(QFileInfo(ini).absolutePath());
+    const QString appDir = QFileInfo(ini).absolutePath();
+    if (safeLocalPath(u8(KOBROWSE_ROOT), appDir, true)) QDir().mkpath(appDir);
     QString text;
+    bool canUpdate = safeLocalPath(u8(KOBROWSE_ROOT), ini, true);
     {
         QFile f(ini);
-        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) { text = QString::fromUtf8(f.readAll()); f.close(); }
+        if (canUpdate && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            text = QString::fromUtf8(f.readAll());
+            if (f.error() != QFile::NoError) canUpdate = false;
+        } else if (QFileInfo(ini).exists() || QFileInfo(ini).isSymLink()) canUpdate = false;
     }
     QStringList lines = text.split(QLatin1Char('\n'));
     QStringList present;
@@ -188,7 +194,7 @@ static void loadConfig() {
     for (const CfgKey &k : CFG_KEYS)
         if (!present.contains(u8(k.key)))
             added << QString() << (u8("; ") + u8(k.comment)) << (u8(k.key) + u8("=") + u8(k.def));
-    if (!added.isEmpty()) {
+    if (canUpdate && !added.isEmpty()) {
         if (insertAt < 0) insertAt = lines.size();
         for (const QString &line : added) lines.insert(insertAt++, line);
         QSaveFile f(ini);
@@ -2359,25 +2365,17 @@ static const SetItem SET_ITEMS[] = {
     { "search_list_font", "Гарнитура результатов поиска", S_FONT, 0, 0, 0, 0 },
 };
 static const int SET_COUNT = int(sizeof(SET_ITEMS) / sizeof(SET_ITEMS[0]));
-static int settingsTab(int i) {
-    const QString key = QString::fromLatin1(SET_ITEMS[i].key);
-    if (key == u8("list_pt") || key == u8("list_font") || key == u8("btn_pt")
-        || key == u8("btn_font") || key == u8("info_pt") || key == u8("opds_key_pt")
-        || key == u8("opds_func_pt") || key == u8("key_font_pt") || key == u8("func_pt")
-        || key == u8("search_list_pt") || key == u8("search_list_font")) return 2;
-    if (key == u8("scale_pct") || key == u8("gap_pt") || key == u8("btn_pad_pt")
-        || key == u8("btn_height_pt") || key == u8("icon_pt") || key == u8("btn_radius_pt")
-        || key == u8("btn_line_pt")) return 1;
-    return 0;
-}
-
 // Записать значения в kobrowse.ini: строка «ключ=…» заменяется, комментарии сохраняются
 static bool saveConfig(const QStringList &keys, const QStringList &vals) {
     const QString ini = u8(KOBROWSE_INI);
+    if (keys.size() != vals.size() || !safeLocalPath(u8(KOBROWSE_ROOT), ini, true)) return false;
     QString text;
     {
         QFile f(ini);
-        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) { text = QString::fromUtf8(f.readAll()); f.close(); }
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            text = QString::fromUtf8(f.readAll());
+            if (f.error() != QFile::NoError) return false;
+        } else if (QFileInfo(ini).exists() || QFileInfo(ini).isSymLink()) return false;
     }
     QStringList lines = text.split(QLatin1Char('\n'));
     bool inSection = false, hasSection = false;
@@ -2414,6 +2412,9 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
 // ---------- окно менеджера ----------
 // Без Q_OBJECT: только сигналы Qt + лямбды, moc не нужен
 class KobrowseWindow : public QWidget {
+#ifdef KOBROWSE_SETTINGS_TEST
+    friend class SettingsUiTest;
+#endif
 public:
     // parent — главное окно Nickel: менеджер лежит поверх его содержимого, а системные
     // диалоги Nickel (USB, питание) — отдельные окна и остаются сверху
@@ -2585,6 +2586,7 @@ public:
         QHBoxLayout *confirmButtons = new QHBoxLayout();
         QPushButton *confirmYes = makeButton(confirmButtons, fBtn, "Да", BTN_HEIGHT, 1);
         QPushButton *confirmNo = makeButton(confirmButtons, fBtn, "Отмена", BTN_HEIGHT, 1);
+        confirmYes->setObjectName(u8("confirmYes")); confirmNo->setObjectName(u8("confirmNo"));
         confirmLayout->addLayout(confirmButtons);
         connect(confirmYes, &QPushButton::clicked, [this]() { confirmDeletion(); });
         connect(confirmNo, &QPushButton::clicked, [this]() { m_confirm->hide(); m_pendingDelete = 0; });
@@ -2874,7 +2876,7 @@ private:
                     klog(u8("settings tap row %1 dir %2 (en=%3 vis=%4)")
                              .arg(stepRow.toInt()).arg(dir)
                              .arg(b->isEnabled() ? 1 : 0).arg(b->isVisible() ? 1 : 0));
-                    stepSetting(stepRow.toInt(), dir);
+                    if (b->isEnabled() && b->isVisible()) stepSetting(stepRow.toInt(), dir);
                     return;
                 }
                 if (b->isEnabled() && b->isVisible()) b->click();
@@ -3231,10 +3233,18 @@ private:
             if (action == 6) requestDeletion(2); else openTrash();
             return;
         }
-        if (action == 4) {
-            for (int i = 0; i < SET_COUNT; ++i) m_setVals[i] = cfgDefault(u8(SET_ITEMS[i].key));
-            m_resetHomeDraft = true;
-            setButtonFace(m_resetHomeButton, I_NONE, u8("Сброс домашней: да"));
+        if (action == 4 || action == 7) {
+            QStringList keys, defaults;
+            for (int i = 0; i < SET_COUNT; ++i) {
+                keys << u8(SET_ITEMS[i].key);
+                defaults << cfgDefault(u8(SET_ITEMS[i].key));
+            }
+            const int tab = action == 4 ? -1 : m_resetTabPending;
+            resetSettingsDraft(keys, defaults, m_setVals, tab);
+            if (tab == -1 || tab == 0) {
+                m_resetHomeDraft = true;
+                updateHomeDraft();
+            }
             refreshSettings();
             return;
         }
@@ -3487,7 +3497,8 @@ private:
         b->setFixedWidth(w);
         b->setStyleSheet(u8("QPushButton{border:1px solid #000000;border-radius:%1px;"
                             "background-color:#FFFFFF;color:#000000;padding:0;}"
-                            "QPushButton:pressed{background-color:#000000;color:#FFFFFF;}")
+                            "QPushButton:pressed{background-color:#000000;color:#FFFFFF;}"
+                            "QPushButton:disabled{border-color:#aaa;color:#aaa;}")
                              .arg(qRound(BTN_RADIUS)));
         b->setProperty("set_row", idx);
         b->setProperty("set_dir", dir);
@@ -3522,94 +3533,144 @@ private:
         rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(0);
         const double sc = SCREEN_DPI / 300.0;
         const int rowH = qMax(36, qRound(70 * sc));
-        m_generalBlock = new QWidget(content);
-        QVBoxLayout *general = new QVBoxLayout(m_generalBlock);
-        general->setContentsMargins(0, 0, 0, 0); general->setSpacing(0);
-        QLabel *trashHeading = new QLabel(u8("Корзина"), content);
-        trashHeading->setFont(titleFont); general->addWidget(trashHeading);
-        QHBoxLayout *trashRow = new QHBoxLayout();
-        QPushButton *open = makeButton(trashRow, fBtn, "Открыть корзину", rowH, 1);
-        QPushButton *empty = makeButton(trashRow, fBtn, "Очистить корзину", rowH, 1);
-        general->addLayout(trashRow);
-        QHBoxLayout *homeRow = new QHBoxLayout();
-        m_resetHomeButton = makeButton(homeRow, fBtn, "Сбросить домашнюю папку", rowH, 1);
-        QPushButton *resetHome = m_resetHomeButton;
-        general->addLayout(homeRow);
-        QHBoxLayout *logRow = new QHBoxLayout();
-        QPushButton *clearLogs = makeButton(logRow, fBtn, "Очистить журнал", rowH, 1);
-        general->addLayout(logRow);
-        rows->addWidget(m_generalBlock);
-        connect(resetHome, &QPushButton::clicked, [this, resetHome]() {
-            m_resetHomeDraft = !m_resetHomeDraft;
-            setButtonFace(resetHome, I_NONE, m_resetHomeDraft ? u8("Сброс домашней: да") : u8("Сбросить домашнюю папку"));
-        });
-        connect(clearLogs, &QPushButton::clicked, [this]() {
-            m_pendingDelete = 3;
-            m_confirmText->setText(u8("Очистить журнал Kobrowse? Это действие нельзя отменить."));
-            m_confirm->show();
-        });
-        connect(open, &QPushButton::clicked, [this]() { leaveSettingsForTrash(false); });
-        connect(empty, &QPushButton::clicked, [this]() { leaveSettingsForTrash(true); });
-        int trashIndex = -1;
         for (int i = 0; i < SET_COUNT; ++i) {
             m_setLabels << static_cast<QLabel *>(nullptr);
             m_switches << static_cast<SettingSwitch *>(nullptr);
             m_settingRows << static_cast<QWidget *>(nullptr);
             m_settingLines << static_cast<QWidget *>(nullptr);
-            if (QString::fromLatin1(SET_ITEMS[i].key) == u8("trash_enabled")) trashIndex = i;
+            m_minusBtns << static_cast<QPushButton *>(nullptr);
+            m_plusBtns << static_cast<QPushButton *>(nullptr);
         }
-        QVector<int> order;
-        if (trashIndex >= 0) order << trashIndex;
-        for (int i = 0; i < SET_COUNT; ++i) if (i != trashIndex) order << i;
-        for (int position = 0; position < order.size(); ++position) {
-            const int i = order.at(position);
-            QWidget *line = new QWidget(content);
-            line->setMinimumHeight(rowH);
-            QHBoxLayout *r = new QHBoxLayout(line);
-            r->setContentsMargins(0, 0, 0, 0); r->setSpacing(qMax(4, qRound(10 * sc)));
-            QLabel *name = new QLabel(u8(SET_ITEMS[i].label), line);
-            name->setFont(fText); r->addWidget(name, 1);
-            QLabel *val = nullptr;
-            SettingSwitch *toggle = nullptr;
-            if (SET_ITEMS[i].type == S_BOOL) {
-                toggle = new SettingSwitch(line);
-                toggle->setFixedSize(qMax(55, qRound(120*sc)), rowH);
-                toggle->setAccessibleName(u8(SET_ITEMS[i].label));
-                r->addWidget(toggle);
-                connect(toggle, &QPushButton::clicked, this, [this, i]() { stepSetting(i, 1); });
+        const char *headings[] = { "Файлы", "Корзина", "Поведение", "Открытие книг", "Отладка",
+            "Размеры интерфейса", "Дополнительно: кнопки", "Список файлов", "Кнопки",
+            "Сведения и сообщения", "Результаты поиска", "Дополнительно: клавиатура" };
+        for (int g = 0; g < GroupCount; ++g) {
+            const SettingGroup group = static_cast<SettingGroup>(g);
+            QWidget *block = new QWidget(content);
+            QVBoxLayout *groupLayout = new QVBoxLayout(block);
+            groupLayout->setContentsMargins(0, 0, 0, 0); groupLayout->setSpacing(qMax(2, GAP / 3));
+            QWidget *body = new QWidget(block);
+            QVBoxLayout *items = new QVBoxLayout(body);
+            items->setContentsMargins(0, 0, 0, 0); items->setSpacing(0);
+            if (settingGroupAdvanced(group)) {
+                QHBoxLayout *headingRow = new QHBoxLayout();
+                QPushButton *expand = makeButton(headingRow, fBtn, headings[g], rowH, 1);
+                m_advancedButtons[g] = expand;
+                connect(expand, &QPushButton::clicked, [this, g]() {
+                    m_groupExpanded[g] = !m_groupExpanded[g];
+                    updateAdvancedGroup(static_cast<SettingGroup>(g));
+                });
+                groupLayout->addLayout(headingRow);
             } else {
-                val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
-                val->setMinimumWidth(qMax(70, qRound(180 * sc))); r->addWidget(val);
-                if (SET_ITEMS[i].type == S_FONT) {
-                    val->setMaximumWidth(qMax(70, qRound(180 * sc)));
-                    QPushButton *pick = makeButton(r, fBtn, "Выбрать", rowH, 0);
-                    connect(pick, &QPushButton::clicked, [this, i]() { openFontPicker(i); });
-                } else {
-                    const int bw = qMax(32, qRound(80 * sc));
-                    makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
-                    makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
-                }
+                QLabel *heading = new QLabel(u8(headings[g]), block);
+                heading->setWordWrap(true); heading->setFont(titleFont);
+                heading->setMinimumHeight(rowH / 2);
+                groupLayout->addWidget(heading);
             }
-            m_setLabels[i] = val; m_switches[i] = toggle;
-            rows->addWidget(line);
-            QFrame *separator = new QFrame(content); separator->setFrameShape(QFrame::HLine);
-            separator->setStyleSheet(u8("color:#b0b0b0;")); rows->addWidget(separator);
-            m_settingRows[i] = line; m_settingLines[i] = separator;
+            if (group == GroupTrash || group == GroupBooks) {
+                QLabel *hint = new QLabel(group == GroupTrash
+                    ? u8("При выключенной корзине файлы удаляются безвозвратно после подтверждения.")
+                    : u8("Авто — для 4.38; всегда — на свой риск."), body);
+                hint->setFont(fText); hint->setWordWrap(true); items->addWidget(hint);
+            }
+            for (int i = 0; i < SET_COUNT; ++i) {
+                if (settingGroup(u8(SET_ITEMS[i].key)) != group) continue;
+                QWidget *line = new QWidget(body);
+                line->setMinimumHeight(rowH);
+                QHBoxLayout *r = new QHBoxLayout(line);
+                r->setContentsMargins(0, 0, 0, 0); r->setSpacing(qMax(4, qRound(10 * sc)));
+                QLabel *name = new QLabel(u8(SET_ITEMS[i].label), line);
+                name->setFont(fText); name->setWordWrap(true); r->addWidget(name, 1);
+                QLabel *val = nullptr;
+                SettingSwitch *toggle = nullptr;
+                if (SET_ITEMS[i].type == S_BOOL) {
+                    toggle = new SettingSwitch(line);
+                    toggle->setFixedSize(qMax(55, qRound(120 * sc)), rowH);
+                    toggle->setAccessibleName(u8(SET_ITEMS[i].label));
+                    r->addWidget(toggle);
+                    connect(toggle, &QPushButton::clicked, this, [this, i]() { stepSetting(i, 1); });
+                } else {
+                    val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
+                    val->setMinimumWidth(qMax(70, qRound(180 * sc))); r->addWidget(val);
+                    if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
+                        val->setMaximumWidth(qMax(70, qRound(180 * sc)));
+                        QPushButton *pick = makeButton(r, fBtn, "Выбрать", rowH, 0);
+                        pick->setMinimumWidth(qMax(80, qRound(160 * sc)));
+                        connect(pick, &QPushButton::clicked, [this, i]() {
+                            if (SET_ITEMS[i].type == S_FONT) openFontPicker(i);
+                            else openBookPicker(i);
+                        });
+                    } else {
+                        const int bw = qMax(32, qRound(80 * sc));
+                        m_minusBtns[i] = makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
+                        m_plusBtns[i] = makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
+                    }
+                }
+                m_setLabels[i] = val; m_switches[i] = toggle;
+                items->addWidget(line);
+                QFrame *separator = new QFrame(body); separator->setFrameShape(QFrame::HLine);
+                separator->setStyleSheet(u8("color:#b0b0b0;")); items->addWidget(separator);
+                m_settingRows[i] = line; m_settingLines[i] = separator;
+            }
+            if (group == GroupFiles) {
+                m_homeStatus = new QLabel(body);
+                m_homeStatus->setFont(fText); m_homeStatus->setWordWrap(true);
+                m_homeStatus->setTextFormat(Qt::PlainText); items->addWidget(m_homeStatus);
+                QHBoxLayout *actions = new QHBoxLayout();
+                m_resetHomeButton = makeButton(actions, fBtn, "Сбросить домашнюю папку", rowH, 1);
+                connect(m_resetHomeButton, &QPushButton::clicked, [this]() {
+                    m_resetHomeDraft = !m_resetHomeDraft;
+                    updateHomeDraft();
+                });
+                items->addLayout(actions);
+            } else if (group == GroupTrash) {
+                QHBoxLayout *actions = new QHBoxLayout();
+                QPushButton *open = makeButton(actions, fBtn, "Открыть корзину", rowH, 1);
+                QPushButton *empty = makeButton(actions, fBtn, "Очистить корзину", rowH, 1);
+                connect(open, &QPushButton::clicked, [this]() { leaveSettingsForTrash(false); });
+                connect(empty, &QPushButton::clicked, [this]() { leaveSettingsForTrash(true); });
+                items->addLayout(actions);
+            } else if (group == GroupLogging) {
+                QHBoxLayout *actions = new QHBoxLayout();
+                QPushButton *clearLogs = makeButton(actions, fBtn, "Очистить журнал", rowH, 1);
+                connect(clearLogs, &QPushButton::clicked, [this]() {
+                    m_pendingDelete = 3;
+                    m_confirmText->setText(u8("Очистить журнал Kobrowse? Это действие нельзя отменить."));
+                    m_confirm->show();
+                });
+                items->addLayout(actions);
+            }
+            groupLayout->addWidget(body);
+            m_groupBlocks[g] = block; m_groupBodies[g] = body;
+            rows->addWidget(block);
+            if (settingGroupAdvanced(group)) updateAdvancedGroup(group);
         }
+        QLabel *resetHeading = new QLabel(u8("Восстановление настроек"), content);
+        resetHeading->setFont(titleFont); rows->addWidget(resetHeading);
+        QHBoxLayout *resets = new QHBoxLayout();
+        QPushButton *resetTab = makeButton(resets, fBtn, "Сбросить вкладку", rowH, 1);
+        QPushButton *resetAll = makeButton(resets, fBtn, "Сбросить всё", rowH, 1);
+        resetTab->setObjectName(u8("resetTab")); resetAll->setObjectName(u8("resetAll"));
+        rows->addLayout(resets);
+        connect(resetTab, &QPushButton::clicked, [this]() {
+            m_pendingDelete = 7;
+            m_resetTabPending = m_currentSettingsTab;
+            m_confirmText->setText(u8("Сбросить настройки текущей вкладки? Изменения применятся после сохранения."));
+            m_confirm->show();
+        });
+        connect(resetAll, &QPushButton::clicked, [this]() {
+            m_pendingDelete = 4;
+            m_confirmText->setText(u8("Вернуть все настройки по умолчанию? Изменения применятся после сохранения."));
+            m_confirm->show();
+        });
         rows->addStretch(1);
         m_settingsScroll->setWidget(content); v->addWidget(m_settingsScroll, 1);
         setSettingsTab(false);
         QHBoxLayout *bottom = new QHBoxLayout(); bottom->setSpacing(GAP);
         QPushButton *bSave = makeButton(bottom, fBtn, "Сохранить", BTN_HEIGHT, 1);
-        QPushButton *bDef = makeButton(bottom, fBtn, "По умолчанию", BTN_HEIGHT, 1);
         QPushButton *bCanc = makeButton(bottom, fBtn, "Отмена", BTN_HEIGHT, 1);
         v->addLayout(bottom);
         connect(bSave, &QPushButton::clicked, [this]() { saveSettings(); });
-        connect(bDef, &QPushButton::clicked, [this]() {
-            m_pendingDelete = 4;
-            m_confirmText->setText(u8("Вернуть все настройки по умолчанию? Изменения применятся после сохранения."));
-            m_confirm->show();
-        });
         connect(bCanc, &QPushButton::clicked, [this]() { showSettings(false); });
         m_settings->hide();
         m_fonts << QString() << QFontDatabase().families();
@@ -3618,6 +3679,7 @@ private:
     void openFontPicker(int row) {
         if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_FONT) return;
         m_fontPickerRow = row;
+        m_pickerIsBooks = false;
         m_fontPicker->clear();
         QTreeWidgetItem *cancel = new QTreeWidgetItem(m_fontPicker);
         cancel->setText(0, u8("Отмена")); cancel->setData(0, Qt::UserRole, -1);
@@ -3635,22 +3697,62 @@ private:
         if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
+    void openBookPicker(int row) {
+        if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_OPEN) return;
+        m_fontPickerRow = row; m_pickerIsBooks = true;
+        m_fontPicker->clear();
+        const char *labels[] = { "Отмена", "Авто — только 4.38", "Всегда — на свой риск", "Никогда" };
+        QTreeWidgetItem *current = nullptr;
+        const QString value = m_setVals[row].toLower();
+        const int selected = value == u8("1") ? 1 : value == u8("0") ? 2 : 0;
+        for (int n = -1; n < 3; ++n) {
+            QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
+            item->setText(0, u8(labels[n + 1])); item->setData(0, Qt::UserRole, n);
+            item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
+            if (n == selected) current = item;
+        }
+        m_fontPicker->setGeometry(rect().adjusted(GAP * 2, GAP * 2, -GAP * 2, -GAP * 2));
+        m_fontPicker->show(); m_fontPicker->raise();
+        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+    }
+
     void chooseFont(QTreeWidgetItem *item) {
         if (!item) return;
         const int n = item->data(0, Qt::UserRole).toInt();
-        if (n >= 0 && n < m_fonts.size() && m_fontPickerRow >= 0 && m_fontPickerRow < m_setVals.size()) {
-            m_setVals[m_fontPickerRow] = m_fonts[n];
-            refreshSettings();
+        if (m_fontPickerRow >= 0 && m_fontPickerRow < m_setVals.size()) {
+            if (m_pickerIsBooks && n >= 0 && n < 3) {
+                const char *values[] = { "auto", "1", "0" };
+                m_setVals[m_fontPickerRow] = u8(values[n]);
+                refreshSettings();
+            } else if (!m_pickerIsBooks && n >= 0 && n < m_fonts.size()) {
+                m_setVals[m_fontPickerRow] = m_fonts[n];
+                refreshSettings();
+            }
         }
         m_fontPicker->hide();
     }
 
-    void setSettingsTab(int tab) {
-        m_generalBlock->setVisible(tab == 0);
-        for (int i = 0; i < SET_COUNT; ++i) {
-            m_settingRows[i]->setVisible(settingsTab(i) == tab);
-            m_settingLines[i]->setVisible(settingsTab(i) == tab);
+    void updateHomeDraft() {
+        setButtonFace(m_resetHomeButton, I_NONE,
+            m_resetHomeDraft ? u8("Сброс домашней: да") : u8("Сбросить домашнюю папку"));
+        if (m_homeStatus) {
+            const QString path = m_resetHomeDraft ? m_root : readHomeFolder(m_root, u8(KOBROWSE_HOME));
+            m_homeStatus->setText((m_resetHomeDraft ? u8("После сохранения: ") : u8("Домашняя: ")) + path);
         }
+    }
+
+    void updateAdvancedGroup(SettingGroup group) {
+        const int g = int(group);
+        if (!settingGroupAdvanced(group) || !m_advancedButtons[g] || !m_groupBodies[g]) return;
+        m_groupBodies[g]->setVisible(m_groupExpanded[g]);
+        const QString title = group == GroupKeyboard ? u8("Дополнительно: клавиатура") : u8("Дополнительно: кнопки");
+        setButtonFace(m_advancedButtons[g], I_NONE, (m_groupExpanded[g] ? u8("− ") : u8("+ ")) + title);
+    }
+
+    void setSettingsTab(int tab) {
+        m_currentSettingsTab = tab;
+        for (int g = 0; g < GroupCount; ++g)
+            m_groupBlocks[g]->setVisible(settingGroupTab(static_cast<SettingGroup>(g)) == tab);
         m_generalTab->setEnabled(tab != 0); m_viewTab->setEnabled(tab != 1); m_fontTab->setEnabled(tab != 2);
         m_generalTab->update(); m_viewTab->update(); m_fontTab->update();
         m_settingsScroll->verticalScrollBar()->setValue(0);
@@ -3659,7 +3761,7 @@ private:
     void showSettings(bool on) {
         if (on) {
             m_resetHomeDraft = false;
-            setButtonFace(m_resetHomeButton, I_NONE, u8("Сбросить домашнюю папку"));
+            updateHomeDraft();
             QSettings st(u8(KOBROWSE_INI), QSettings::IniFormat);
             st.setIniCodec(QTextCodec::codecForName("UTF-8"));
             m_setVals.clear();
@@ -3734,13 +3836,22 @@ private:
                     shown, Qt::ElideRight, m_setLabels[i]->maximumWidth());
             }
             if (SET_ITEMS[i].type == S_OPEN)
-                shown = v == u8("1") ? u8("всегда") : v == u8("0") ? u8("никогда") : u8("авто (4.38)");
+                shown = v == u8("1") ? u8("Всегда") : v == u8("0") ? u8("Никогда") : u8("Авто");
+            if (SET_ITEMS[i].type == S_NUM) {
+                const QString key = u8(SET_ITEMS[i].key);
+                const bool autoZero = key == u8("key_font_pt") || key == u8("func_pt");
+                shown = settingNumberDisplay(v, SET_ITEMS[i].lo, SET_ITEMS[i].hi, autoZero);
+                bool valid = false;
+                const double number = QString(v).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&valid);
+                if (m_minusBtns[i]) m_minusBtns[i]->setEnabled(!valid || number > SET_ITEMS[i].lo);
+                if (m_plusBtns[i]) m_plusBtns[i]->setEnabled(!valid || number < SET_ITEMS[i].hi);
+            }
             if (m_setLabels[i]) m_setLabels[i]->setText(shown);
             if (m_switches[i]) m_switches[i]->setChecked(v.toDouble() != 0);
         }
     }
 
-    // [−]/[+]: число — на шаг в пределах; гарнитура — предыдущая/следующая; да/нет — переключить
+    // [−]/[+]: число на шаг в пределах; переключатель меняет логическое значение.
     void stepSetting(int i, int dir) {
         if (i < 0 || i >= SET_COUNT || i >= m_setVals.size()) return;
         const SetItem &it = SET_ITEMS[i];
@@ -3748,18 +3859,7 @@ private:
         const QString before = v;
         if (it.type == S_BOOL) {
             v = v.toDouble() != 0 ? u8("0") : u8("1");
-        } else if (it.type == S_OPEN) {            // по кругу: авто → всегда → никогда
-            const char *order[] = { "auto", "1", "0" };
-            int k = v == u8("1") ? 1 : v == u8("0") ? 2 : 0;
-            k = (k + dir + 3) % 3;
-            v = u8(order[k]);
-        } else if (it.type == S_FONT) {
-            int k = -1;
-            for (int j = 0; j < m_fonts.size(); ++j)
-                if (m_fonts[j].compare(v, Qt::CaseInsensitive) == 0) { k = j; break; }
-            k = (k + dir + m_fonts.size()) % m_fonts.size();
-            v = m_fonts[k];
-        } else {
+        } else if (it.type == S_NUM) {
             bool ok = false;
             double x = QString(v).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
             if (!ok) x = cfgDefault(u8(it.key)).toDouble();
@@ -3804,7 +3904,7 @@ private:
     QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom, m_holdTimer, m_pageTimer;
     QString       m_holdPath;
     QStringList   m_deleteSnapshot;
-    bool          m_menuTouch = false, m_fontPickerTouch = false;
+    bool          m_menuTouch = false, m_fontPickerTouch = false, m_pickerIsBooks = false;
     int           m_menuScrollStart = 0, m_fontPickerScrollStart = 0, m_fontPickerRow = -1;
     QTreeWidget *m_fontPicker = nullptr;
     bool          m_holdFired = false, m_holdBlank = false, m_menuRequested = false, m_swipeList = false;
@@ -3836,11 +3936,16 @@ private:
     QPushButton *m_countLabel = nullptr;
     int m_fileCount = 0, m_dirCount = 0;
     QScrollArea *m_settingsScroll = nullptr;
-    QWidget *m_generalBlock = nullptr;
+    QWidget *m_groupBlocks[GroupCount] = {}, *m_groupBodies[GroupCount] = {};
+    QPushButton *m_advancedButtons[GroupCount] = {};
+    bool m_groupExpanded[GroupCount] = {};
+    int m_currentSettingsTab = 0, m_resetTabPending = 0;
     QPushButton *m_generalTab = nullptr, *m_viewTab = nullptr, *m_fontTab = nullptr;
     QPushButton *m_resetHomeButton = nullptr;
+    QLabel *m_homeStatus = nullptr;
     bool m_resetHomeDraft = false;
     QVector<QWidget *> m_settingRows, m_settingLines;
+    QVector<QPushButton *> m_minusBtns, m_plusBtns;
     QVector<SettingSwitch *> m_switches;
     bool m_settingsTouch = false;
     int m_settingsScrollStart = 0;
