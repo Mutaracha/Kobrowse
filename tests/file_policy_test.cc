@@ -1,4 +1,5 @@
 #include "../src/file_policy.h"
+#include "../src/file_mutations.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QTemporaryDir>
@@ -72,6 +73,37 @@ int main(int argc, char **argv) {
     require(!safeLocalPath(root, root + "/dangling", true), "dangling link rejected");
     require(!safeCopyTree(root, root + "/Books"), "nested link prevents copy");
     require(safeCopyTree(root, root + "/Excluded"), "ordinary folder can be copied");
+    const QString trash = root + "/.kobrowse_trash";
+    require(QDir().mkpath(trash + "/nested"), "trash folder");
+    writeFile(trash + "/nested/book", "trash");
+    require(::symlink((root + "/Books/book.epub").toLocal8Bit().constData(),
+                      (trash + "/nested/link").toLocal8Bit().constData()) == 0, "trash link");
+    require(!mayDeleteLocalEntry(root, trash, trash), "trash root cannot be deleted");
+    require(!mayDeleteLocalEntry(root, trash, root + "/.kobo/Kobo"), "system folder cannot be deleted");
+    require(!mayDeleteLocalEntry(root, trash, root + "/alias"), "link outside trash cannot be deleted");
+    require(mayDeleteLocalEntry(root, trash, trash + "/nested"), "trash entry can be deleted");
+    require(removeTreeNoFollow(root, trash + "/nested"), "remove trash tree without following links");
+    require(QFileInfo(root + "/Books/book.epub").exists() && QFileInfo(trash).isDir(),
+            "link target and trash root survive");
+    const QString folder = root + "/Archives";
+    require(QDir().mkpath(folder), "archive folder");
+    require(archiveDestination(folder, "book.fb2") == folder + "/book.fb2.zip", "first archive name");
+    writeFile(folder + "/book.fb2.zip", "keep");
+    writeFile(folder + "/book.fb2_1.zip", "keep");
+    require(archiveDestination(folder, "book.fb2") == folder + "/book.fb2_2.zip", "archive counter");
+    require(QDir().mkpath(root + "/.adds/kobrowse/sub"), "app data");
+    require(QDir().mkpath(root + "/.adds/nm"), "menu directory");
+    writeFile(root + "/.adds/kobrowse/.ini", "config");
+    writeFile(root + "/.adds/nm/kobrowse", "menu");
+    writeFile(root + "/.adds/nm/other", "other");
+    writeFile(root + "/outside.txt", "retain");
+    require(::symlink((root + "/outside.txt").toLocal8Bit().constData(),
+                      (root + "/.adds/kobrowse/sub/link").toLocal8Bit().constData()) == 0, "cleanup symlink");
+    require(cleanupAppInstall(root), "uninstall cleanup");
+    require(!QFileInfo(root + "/.adds/kobrowse").exists(), "app data removed");
+    require(!QFileInfo(root + "/.adds/nm/kobrowse").exists(), "app menu removed");
+    require(QFileInfo(root + "/.adds/nm/other").exists() && QFileInfo(root + "/outside.txt").exists(),
+            "other data and link target retained");
     QTextStream(stdout) << "Filesystem tests passed\n";
     return 0;
 }

@@ -59,6 +59,7 @@
 #include <NickelHook.h>
 
 #include "file_policy.h"
+#include "file_mutations.h"
 #include "zip_writer.h"
 #include <dirent.h>
 #include <cerrno>
@@ -95,7 +96,7 @@ static int     KEY_PX = 34;             // кегль поля запроса; �
 // Список результатов поиска — свои кегль и гарнитура, чтобы не менять вид списка файлов.
 static int     SEARCH_LIST_PX = 42;
 static QString SEARCH_LIST_FONT;
-static bool    SHOW_HIDDEN = true;
+static bool    SHOW_HIDDEN = true, TRASH_ENABLED = true;
 static QString OPEN_BOOKS;   // auto / 1 / 0 — см. open_books в kobrowse.ini
 
 // Ключи kobrowse.ini: имя, значение по умолчанию, пояснение
@@ -114,6 +115,7 @@ static const CfgKey CFG_KEYS[] = {
     { "btn_line_pt",   "0.6",         "толщина рамки кнопки, пт" },
     { "long_tap_ms",   "500",         "долгое нажатие (выбор строки), мс" },
     { "idle_min",      "2",           "закрыть менеджер, если не было касаний, мин" },
+    { "trash_enabled", "1",           "использовать корзину: 1 — да, 0 — удалять после подтверждения" },
     { "show_hidden",   "1",           "показывать скрытые файлы и папки (с точкой): 1 — да, 0 — нет" },
     { "scale_pct",     "100",         "общий масштаб интерфейса kobrowse, %: 100 — как на Clara HD (по ширине экрана); 50–200" },
     { "open_books",    "auto",        "открытие книг тапом: auto — только на проверенной прошивке 4.38; 1 — всегда (на свой риск); 0 — никогда" },
@@ -208,6 +210,7 @@ static void loadConfig() {
     LIST_FONT   = st.value(u8("kobrowse/list_font")).toString().trimmed();
     BTN_FONT    = st.value(u8("kobrowse/btn_font")).toString().trimmed();
     SHOW_HIDDEN = num("show_hidden", 1, 0, 1) != 0;
+    TRASH_ENABLED = num("trash_enabled", 1, 0, 1) != 0;
 }
 
 // Отладочный лог: файл открывается и сразу закрывается (не держим дескриптор на /mnt/onboard)
@@ -2217,6 +2220,7 @@ static const SetItem SET_ITEMS[] = {
     { "btn_line_pt",   "Толщина рамки, пт",      S_NUM,  0.1, 0.1, 3,    1 },
     { "long_tap_ms",   "Долгое нажатие, мс",     S_NUM,  50,  150, 3000, 0 },
     { "idle_min",      "Автозакрытие, мин",      S_NUM,  0.5, 0.5, 60,   1 },
+    { "trash_enabled", "Корзина",                 S_BOOL, 0,   0,   1,    0 },
     { "show_hidden",   "Скрытые файлы",          S_BOOL, 0,   0,   1,    0 },
     { "scale_pct",     "Масштаб, %",             S_NUM,  5,   50,  200,  0 },
     { "open_books",    "Открытие книг",          S_OPEN, 0,   0,   0,    0 },
@@ -2340,6 +2344,7 @@ public:
         m_unzip->hide();
         lay->addWidget(m_unzip);
         connect(bUz,    &QPushButton::clicked, [this]() { unzipFile(m_zipPath, false); });
+        bUzDel->setVisible(TRASH_ENABLED);
         connect(bUzDel, &QPushButton::clicked, [this]() { unzipFile(m_zipPath, true); });
         connect(bUzNo,  &QPushButton::clicked, [this]() { m_unzip->hide(); });
 
@@ -2371,22 +2376,58 @@ public:
             }
         });
 
-        // Ряд 2 — действия: появляется, когда есть выбор или что-то в буфере.
-        // 4 кнопки в ряд: при 6–7 подписи упирались в ~16 px и «Кегль кнопок» не влиял.
-        m_actions = new QWidget(this);
-        auto *agrid = new QGridLayout(m_actions);
-        agrid->setContentsMargins(0, 0, 0, 0);
-        agrid->setSpacing(GAP);
-        for (int c = 0; c < 12; ++c) agrid->setColumnStretch(c, 1);
-        m_bCopy  = addButtonAt(agrid, 0, 0, 3, fBtn, "Копир.", I_COPY);
-        m_bCut   = addButtonAt(agrid, 0, 3, 3, fBtn, "Вырезать", I_CUT);
-        m_bTrash = addButtonAt(agrid, 0, 6, 3, fBtn, "В корзину", I_TRASH);
-        m_bInfo  = addButtonAt(agrid, 0, 9, 3, fBtn, "Сведения", I_INFO);
-        m_bZip   = addButtonAt(agrid, 1, 0, 3, fBtn, "В ZIP", I_NONE);
-        m_bClear = addButtonAt(agrid, 1, 3, 3, fBtn, "Снять выбор", I_DESELECT);
-        m_bPaste = addButtonAt(agrid, 1, 6, 3, fBtn, "Вставить", I_CLIPBOARD);
-        m_bDrop  = addButtonAt(agrid, 1, 9, 3, fBtn, "Очистить буфер", I_CLIPBOARD_X);
-        lay->addWidget(m_actions);
+        // Контекстное меню — список операций поверх файлов, без панели кнопок.
+        m_actions = new QTreeWidget(this);
+        m_actions->setColumnCount(1);
+        m_actions->setHeaderHidden(true);
+        m_actions->setRootIsDecorated(false);
+        m_actions->setIndentation(0);
+        m_actions->setFont(fList);
+        m_actions->setFocusPolicy(Qt::NoFocus);
+        m_actions->setSelectionMode(QAbstractItemView::NoSelection);
+        m_actions->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_actions->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_actions->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
+                                   "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"));
+        m_actions->hide();
+        connect(m_actions, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int) {
+            if (it) runMenuAction(it->data(0, Qt::UserRole).toInt());
+        });
+
+        // Подтверждение необратимых операций — внутри окна, без системного диалога.
+        m_confirm = new QWidget(this);
+        QVBoxLayout *confirmLayout = new QVBoxLayout(m_confirm);
+        confirmLayout->setContentsMargins(GAP, GAP, GAP, GAP);
+        m_confirm->setObjectName(u8("confirm"));
+        m_confirm->setStyleSheet(u8("QWidget#confirm{border:2px solid black;background:white;}"));
+        m_confirmText = new QLabel(m_confirm);
+        m_confirmText->setWordWrap(true);
+        m_confirmText->setFont(fMsg);
+        m_confirmText->setStyleSheet(u8("border:none;"));
+        confirmLayout->addWidget(m_confirmText);
+        QHBoxLayout *confirmButtons = new QHBoxLayout();
+        QPushButton *confirmYes = makeButton(confirmButtons, fBtn, "Удалить", BTN_HEIGHT, 1);
+        QPushButton *confirmNo = makeButton(confirmButtons, fBtn, "Отмена", BTN_HEIGHT, 1);
+        confirmLayout->addLayout(confirmButtons);
+        connect(confirmYes, &QPushButton::clicked, [this]() { confirmDeletion(); });
+        connect(confirmNo, &QPushButton::clicked, [this]() { m_confirm->hide(); m_pendingDelete = 0; });
+        m_confirm->hide();
+        lay->addWidget(m_confirm);
+
+        m_holdTimer.setSingleShot(true);
+        m_holdTimer.setInterval(LONG_TAP_MS);
+        connect(&m_holdTimer, &QTimer::timeout, this, [this]() {
+            if (m_holdPath.isEmpty() || m_moved || m_twoFinger) return;
+            for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+                QTreeWidgetItem *it = m_list->topLevelItem(i);
+                if (it->data(0, ROLE_PATH).toString() == m_holdPath) {
+                    m_holdFired = true;
+                    m_menuRequested = true;
+                    toggleMark(it);
+                    break;
+                }
+            }
+        });
 
         // Ряд 1 — навигация: 4 кнопки + 2 широкие под ними (крупные подписи)
         m_nav = new QWidget(this);
@@ -2398,8 +2439,9 @@ public:
         auto *bPrev = addButtonAt(ngrid, 0, 3, 3, fBtn, "Пред.", I_CHEV_UP);
         auto *bNext = addButtonAt(ngrid, 0, 6, 3, fBtn, "След.", I_CHEV_DOWN);
         auto *bFind = addButtonAt(ngrid, 0, 9, 3, fBtn, "Поиск", I_INFO);
-        auto *bSet  = addButtonAt(ngrid, 1, 0, 6, fBtn, "Настройки", I_GEAR);
-        auto *bClose= addButtonAt(ngrid, 1, 6, 6, fBtn, "Закрыть", I_CLOSE);
+        auto *bMenu = addButtonAt(ngrid, 1, 0, 4, fBtn, "Меню", I_INFO);
+        auto *bSet  = addButtonAt(ngrid, 1, 4, 4, fBtn, "Настройки", I_GEAR);
+        auto *bClose= addButtonAt(ngrid, 1, 8, 4, fBtn, "Закрыть", I_CLOSE);
         lay->addWidget(m_nav);
 
         connect(bFind, &QPushButton::clicked, [this]() { ksearch_open(); });
@@ -2408,17 +2450,9 @@ public:
             m_list->verticalScrollBar()->triggerAction(QAbstractSlider::SliderPageStepSub); });
         connect(bNext, &QPushButton::clicked, [this]() {
             m_list->verticalScrollBar()->triggerAction(QAbstractSlider::SliderPageStepAdd); });
+        connect(bMenu, &QPushButton::clicked, [this]() { m_menuRequested = !m_menuRequested; updateActions(); });
         connect(bSet, &QPushButton::clicked, [this]() { showSettings(true); });
         connect(bClose, &QPushButton::clicked, [this]() { close(); });
-
-        connect(m_bCopy,  &QPushButton::clicked, [this]() { toClipboard(false); });
-        connect(m_bCut,   &QPushButton::clicked, [this]() { toClipboard(true); });
-        connect(m_bTrash, &QPushButton::clicked, [this]() { moveToTrash(); });
-        connect(m_bInfo,  &QPushButton::clicked, [this]() { showInfo(); });
-        connect(m_bZip,   &QPushButton::clicked, [this]() { zipSelected(); });
-        connect(m_bClear, &QPushButton::clicked, [this]() { m_marked.clear(); load(); });
-        connect(m_bPaste, &QPushButton::clicked, [this]() { paste(); });
-        connect(m_bDrop,  &QPushButton::clicked, [this]() { m_clip.clear(); updateActions(); });
 
         // Страховка 1: закрыть после IDLE_MS без касаний
         m_idle.setSingleShot(true);
@@ -2491,9 +2525,29 @@ protected:
             m_pressPos = p;
             m_moved = false;
             m_twoFinger = false;
+            m_holdFired = false;
+            m_holdPath.clear();
+            m_holdTimer.stop();
+            m_menuTouch = m_actions->isVisible()
+                && m_actions->viewport()->rect().contains(m_actions->viewport()->mapFrom(this, p));
+            m_menuScrollStart = m_actions->verticalScrollBar()->value();
+            if (!m_menuTouch && !m_confirm->isVisible() && inList(p)) {
+                QTreeWidgetItem *item = m_list->itemAt(m_list->viewport()->mapFrom(this, p));
+                if (item && !item->data(0, ROLE_PARENT).toBool()) {
+                    m_holdPath = item->data(0, ROLE_PATH).toString();
+                    if (!m_holdPath.isEmpty()) m_holdTimer.start();
+                }
+            }
             break;
         case QEvent::TouchUpdate:
+            if (m_menuTouch && !pts.isEmpty()) {
+                if ((p - m_pressPos).manhattanLength() > SWIPE_PX) m_moved = true;
+                if (m_moved) m_actions->verticalScrollBar()->setValue(m_menuScrollStart - (p.y() - m_pressPos.y()));
+                if (pts.size() >= 2) m_moved = true;
+                break;
+            }
             if (pts.size() >= 2) {
+                m_holdTimer.stop(); m_holdPath.clear();
                 // Два пальца — перетаскивание списка (по среднему положению пальцев)
                 const qreal y = (mapFromGlobal(pts.at(0).screenPos().toPoint()).y()
                                  + mapFromGlobal(pts.at(1).screenPos().toPoint()).y()) / 2.0;
@@ -2506,16 +2560,18 @@ protected:
                 }
             } else if (!pts.isEmpty() && (p - m_pressPos).manhattanLength() > SWIPE_PX) {
                 m_moved = true;   // один палец сдвинулся — это не нажатие
+                m_holdTimer.stop(); m_holdPath.clear();
             }
             break;
         case QEvent::TouchEnd: {
-            const bool longTap = m_press.isValid() && m_press.elapsed() >= LONG_TAP_MS;
+            m_holdTimer.stop(); m_holdPath.clear();
             if (m_twoFinger && m_tapLog > 0) { --m_tapLog; klog(u8("two-finger scroll")); }
-            if (!pts.isEmpty() && !m_twoFinger && !m_moved) tapAt(p, longTap);
+            if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired) tapAt(p, false);
             m_twoFinger = false;
             break;
         }
         default:              // TouchCancel
+            m_holdTimer.stop(); m_holdPath.clear();
             m_twoFinger = false;
             break;
         }
@@ -2528,6 +2584,7 @@ protected:
     void resizeEvent(QResizeEvent *e) override {
         QWidget::resizeEvent(e);
         if (m_list) m_list->doItemsLayout();
+        placeActionMenu();
         fitButtonFont();
     }
 
@@ -2543,6 +2600,24 @@ private:
 
     // Касание в точке p (координаты окна)
     void tapAt(const QPoint &p, bool longTap) {
+        if (m_actions->isVisible()) {
+            const QPoint menuPoint = m_actions->viewport()->mapFrom(this, p);
+            if (m_actions->viewport()->rect().contains(menuPoint)) {
+                QTreeWidgetItem *item = m_actions->itemAt(menuPoint);
+                if (item) runMenuAction(item->data(0, Qt::UserRole).toInt());
+                return;
+            }
+        }
+        if (m_confirm->isVisible()) {
+            QWidget *target = childAt(p);
+            for (QWidget *cur = target; cur && cur != this; cur = cur->parentWidget()) {
+                if (QPushButton *button = qobject_cast<QPushButton *>(cur)) {
+                    if (m_confirm->isAncestorOf(button)) button->click();
+                    return;
+                }
+            }
+            return;
+        }
         // Список проверяем по геометрии, не через childAt (надёжнее)
         const QPoint vp = m_list->viewport()->mapFrom(this, p);
         if (m_list->isVisible() && m_list->viewport()->rect().contains(vp)) {
@@ -2709,29 +2784,75 @@ private:
         const QString path = it->data(0, ROLE_PATH).toString();
         if (path.isEmpty()) return;
         const bool on = !m_marked.contains(path);
-        if (on) m_marked.insert(path); else m_marked.remove(path);
+        if (on) { m_marked.insert(path); m_selectionOrder << path; }
+        else { m_marked.remove(path); m_selectionOrder.removeAll(path); }
         setMarkedLook(it, on);
         updateActions();
         ensureMarkedVisible();
     }
 
-    // Состав ряда действий: есть выбор → операции над выбором; иначе есть буфер → вставка
+    enum MenuAction { ActCopy, ActCut, ActDelete, ActInfo, ActZip, ActClear,
+                      ActPaste, ActDrop, ActOpenTrash, ActEmptyTrash, ActClose };
+
+    void addMenuOption(const QString &label, MenuAction action) {
+        QTreeWidgetItem *item = new QTreeWidgetItem(m_actions);
+        item->setText(0, label);
+        item->setData(0, Qt::UserRole, int(action));
+        item->setSizeHint(0, QSize(0, qMax(BTN_HEIGHT, QFontMetrics(m_actions->font()).height() + 24)));
+    }
+
+    void placeActionMenu() {
+        if (!m_actions) return;
+        const int w = qMax(1, width() * 3 / 4 - GAP);
+        const int row = qMax(BTN_HEIGHT, QFontMetrics(m_actions->font()).height() + 24);
+        const int h = qMin(height() - 2 * GAP, row * m_actions->topLevelItemCount() + 6);
+        m_actions->setGeometry(width() - GAP - w, GAP, w, qMax(1, h));
+        if (m_actions->isVisible()) m_actions->raise();
+    }
+
     void updateActions() {
-        m_info->hide(); // любое изменение выбора убирает сведения
-        const bool sel = !m_marked.isEmpty();
-        const bool clip = !m_clip.isEmpty();
-        m_bCopy->setVisible(sel);
-        m_bCut->setVisible(sel);
-        m_bTrash->setVisible(sel);
-        m_bInfo->setVisible(m_marked.size() == 1);
-        m_bZip->setVisible(sel);
-        m_bClear->setVisible(sel);
-        m_bPaste->setVisible(!sel && clip);
-        m_bDrop->setVisible(!sel && clip);
-        if (clip)
-            setButtonFace(m_bPaste, I_CLIPBOARD,
-                          (m_clipCut ? u8("Переместить сюда (%1)") : u8("Вставить (%1)")).arg(m_clip.size()));
-        m_actions->setVisible(sel || clip);
+        m_info->hide();
+        m_actions->clear();
+        const bool selected = !m_marked.isEmpty();
+        if (selected) {
+            addMenuOption(u8("Копировать"), ActCopy);
+            addMenuOption(u8("Вырезать"), ActCut);
+            addMenuOption((TRASH_ENABLED && !pathWithin(m_path, m_trash))
+                          ? u8("В корзину") : u8("Удалить"), ActDelete);
+            if (m_marked.size() == 1) addMenuOption(u8("Сведения"), ActInfo);
+            addMenuOption(u8("Создать ZIP-архив"), ActZip);
+            addMenuOption(u8("Снять выбор"), ActClear);
+        } else if (!m_clip.isEmpty()) {
+            addMenuOption(m_clipCut ? u8("Переместить сюда") : u8("Вставить"), ActPaste);
+            addMenuOption(u8("Очистить буфер"), ActDrop);
+        }
+        addMenuOption(u8("Открыть корзину"), ActOpenTrash);
+        addMenuOption(u8("Очистить корзину"), ActEmptyTrash);
+        addMenuOption(u8("Закрыть меню"), ActClose);
+        placeActionMenu();
+        m_actions->setVisible(m_menuRequested && !m_settings->isVisible() && !m_confirm->isVisible());
+        if (m_actions->isVisible()) m_actions->raise();
+    }
+
+    void runMenuAction(int action) {
+        m_menuRequested = false;
+        m_actions->hide();
+        switch (action) {
+        case ActCopy: toClipboard(false); break;
+        case ActCut: toClipboard(true); break;
+        case ActDelete:
+            if (TRASH_ENABLED && !pathWithin(m_path, m_trash)) moveToTrash();
+            else requestDeletion(1);
+            break;
+        case ActInfo: showInfo(); break;
+        case ActZip: zipSelected(); break;
+        case ActClear: m_marked.clear(); m_selectionOrder.clear(); load(); break;
+        case ActPaste: paste(); break;
+        case ActDrop: m_clip.clear(); updateActions(); break;
+        case ActOpenTrash: openTrash(); break;
+        case ActEmptyTrash: requestDeletion(2); break;
+        default: break;
+        }
     }
 
     // Копировать / Вырезать: запомнить отмеченное, снять выбор
@@ -2744,7 +2865,7 @@ private:
         const bool skipped = list.size() < m_marked.size();
         m_clip = list;
         m_clipCut = cut;
-        m_marked.clear();
+        m_marked.clear(); m_selectionOrder.clear();
         load();
         if (skipped) showMessage(u8("Ссылки и защищённые пути пропущены"));
     }
@@ -2792,18 +2913,64 @@ private:
 
     // Архив создаётся рядом с выбранными элементами, исходники не меняются.
     void zipSelected() {
-        QStringList sources = m_marked.values();
+        QStringList sources;
+        for (const QString &path : m_selectionOrder)
+            if (m_marked.contains(path)) sources << path;
         if (sources.isEmpty()) return;
-        sources.sort();
-        const QString name = sources.size() == 1
-            ? QFileInfo(sources.first()).fileName() + u8(".zip") : u8("Архив.zip");
-        const QString dest = uniqueName(m_path, name, false);
+        const QString dest = archiveDestination(m_path, QFileInfo(sources.first()).fileName());
         QString error;
         if (!createZipArchive(m_root, dest, sources, error)) { showMessage(error); return; }
         ::sync();
-        m_marked.clear();
+        m_marked.clear(); m_selectionOrder.clear();
         load();
         showMessage(u8("Создан архив: ") + QFileInfo(dest).fileName());
+    }
+
+    void openTrash() {
+        if (!safeLocalPath(m_root, m_trash, true) || !QDir().mkpath(m_trash)
+            || !safeLocalPath(m_root, m_trash)) {
+            showMessage(u8("Корзина недоступна")); return;
+        }
+        m_path = m_trash;
+        m_marked.clear(); m_selectionOrder.clear();
+        load();
+    }
+
+    void requestDeletion(int action) {
+        if (action == 1 && m_marked.isEmpty()) return;
+        m_pendingDelete = action;
+        m_deleteSnapshot = m_selectionOrder;
+        m_confirmText->setText(action == 2
+            ? u8("Очистить корзину? Все её элементы будут удалены безвозвратно.")
+            : u8("Удалить выбранные элементы безвозвратно: %1?").arg(m_deleteSnapshot.size()));
+        m_confirm->show();
+    }
+
+    void confirmDeletion() {
+        const int action = m_pendingDelete;
+        m_pendingDelete = 0;
+        m_confirm->hide();
+        if (action != 1 && action != 2) return;
+        QStringList paths;
+        if (action == 2) {
+            if (!safeLocalPath(m_root, m_trash) || !QFileInfo(m_trash).isDir()) {
+                showMessage(u8("Корзина недоступна или пуста")); return;
+            }
+            for (const QFileInfo &item : browserEntries(QDir(m_trash), true)) paths << item.absoluteFilePath();
+        } else paths = m_deleteSnapshot;
+        QSet<QString> failed;
+        for (const QString &path : paths) {
+            if (!mayDeleteLocalEntry(m_root, m_trash, path) || !removeTreeNoFollow(m_root, path)) {
+                failed.insert(path); continue;
+            }
+            m_clip.removeAll(path);
+            m_marked.remove(path);
+            m_selectionOrder.removeAll(path);
+        }
+        ::sync();
+        load();
+        showMessage(failed.isEmpty() ? u8("Удалено: %1").arg(paths.size())
+                                   : u8("Не удалено: %1").arg(failed.size()));
     }
 
     // В корзину: перенос в /mnt/onboard/.kobrowse_trash с датой в начале имени
@@ -2823,6 +2990,8 @@ private:
         }
         ::sync();
         m_marked = remaining;
+        for (int i = m_selectionOrder.size() - 1; i >= 0; --i)
+            if (!remaining.contains(m_selectionOrder.at(i))) m_selectionOrder.removeAt(i);
         load();
         if (!remaining.isEmpty()) showMessage(u8("Не перенесено в корзину: %1").arg(remaining.size()));
     }
@@ -2909,7 +3078,7 @@ private:
         if (!safeLocalPath(m_root, path)) { showMessage(u8("Ссылка или путь вне накопителя недоступен")); return; }
         if (it->data(0, ROLE_DIR).toBool()) {
             m_path = path;
-            m_marked.clear();
+            m_marked.clear(); m_selectionOrder.clear();
             load();
             return;
         }
@@ -3112,7 +3281,7 @@ private:
         m_info->hide();
         m_msg->hide();
         m_settings->setVisible(on);
-        if (on) { m_actions->hide(); m_setGeom.start(); } else updateActions();
+        if (on) { m_menuRequested = false; m_actions->hide(); m_setGeom.start(); } else updateActions();
     }
 
     // Диагностика: геометрия строк настроек после раскладки (пишется в kobrowse.log).
@@ -3137,7 +3306,12 @@ private:
         for (int i = 0; i < SET_COUNT; ++i) {
             const QString &v = m_setVals[i];
             QString shown = v;
-            if (SET_ITEMS[i].type == S_BOOL) shown = v.toDouble() != 0 ? u8("показывать") : u8("скрывать");
+            if (SET_ITEMS[i].type == S_BOOL) {
+                const bool enabled = v.toDouble() != 0;
+                shown = QString::fromLatin1(SET_ITEMS[i].key) == u8("trash_enabled")
+                    ? (enabled ? u8("включена") : u8("отключена"))
+                    : (enabled ? u8("показывать") : u8("скрывать"));
+            }
             if (SET_ITEMS[i].type == S_FONT && v.isEmpty()) shown = u8("как в Nickel");
             if (SET_ITEMS[i].type == S_OPEN)
                 shown = v == u8("1") ? u8("всегда") : v == u8("0") ? u8("никогда") : u8("авто (4.38)");
@@ -3190,7 +3364,7 @@ private:
         QString parent = QFileInfo(m_path).absolutePath();
         if (!parent.startsWith(m_root)) parent = m_root; // не выходим за корень
         m_path = parent;
-        m_marked.clear();
+        m_marked.clear(); m_selectionOrder.clear();
         load();
     }
 
@@ -3198,7 +3372,13 @@ private:
     bool          m_showHidden;
     bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
-    QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom;
+    QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom, m_holdTimer;
+    QString       m_holdPath;
+    QStringList   m_deleteSnapshot;
+    bool          m_menuTouch = false;
+    int           m_menuScrollStart = 0;
+    bool          m_holdFired = false, m_menuRequested = false;
+    int           m_pendingDelete = 0;
     QPoint        m_pressPos;
     int           m_scrollStart = 0;
     bool          m_twoFinger = false, m_moved = false;
@@ -3208,6 +3388,7 @@ private:
     QElapsedTimer m_press;
     QFont         m_bold;
     QSet<QString> m_marked;          // отмеченные пути (в текущей папке)
+    QStringList m_selectionOrder;    // порядок выбора для имени архива
     QStringList   m_clip;            // буфер: пути для вставки
     bool          m_clipCut = false; // буфер «вырезан» (перенос) или «скопирован»
     QTreeWidget  *m_list = nullptr;
@@ -3220,10 +3401,10 @@ private:
     QWidget      *m_unzip = nullptr;    // панель «Распаковать архив?»
     QLabel       *m_unzipTitle = nullptr;
     QString       m_zipPath;
-    QWidget      *m_actions = nullptr;
+    QTreeWidget  *m_actions = nullptr;
+    QWidget      *m_confirm = nullptr;
+    QLabel       *m_confirmText = nullptr;
     QPushButton  *m_btnUp = nullptr;
-    QPushButton  *m_bCopy = nullptr, *m_bCut = nullptr, *m_bTrash = nullptr, *m_bClear = nullptr, *m_bInfo = nullptr;
-    QPushButton  *m_bPaste = nullptr, *m_bDrop = nullptr, *m_bZip = nullptr;
     QList<ButtonFace *> m_faces, m_wideFaces;    // подписи всех кнопок — для общего кегля
 };
 
@@ -3448,6 +3629,14 @@ static int kobrowse_init() {
     return 0;
 }
 
+// Явное удаление по флагу: данные приложения и его пункт NickelMenu.
+// Корзина пользователей хранится отдельно и не удаляется.
+static bool kobrowse_uninstall() {
+    const bool ok = cleanupAppInstall(u8(KOBROWSE_ROOT));
+    if (!ok) nh_log("uninstall cleanup failed; manual cleanup may be required");
+    return ok;
+}
+
 // Описание плагина; файл uninstall_flag на ридере удаляет плагин при загрузке.
 // failsafe: если Nickel упадёт в первые 10 с после старта, плагин отключится сам.
 static struct nh_info kobrowse_info = {
@@ -3472,4 +3661,5 @@ NickelHook(
     .info  = &kobrowse_info,
     .hook  = kobrowse_hook,
     .dlsym = kobrowse_dlsym,
+    .uninstall = &kobrowse_uninstall,
 )
