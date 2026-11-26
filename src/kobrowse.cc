@@ -2447,32 +2447,6 @@ public:
         buildSettings(fMsg, fBtn);
         lay->addWidget(m_settings, 1);
 
-        // Панель «Распаковать архив?»: короткий тап по .zip
-        m_unzip = new QWidget(this);
-        m_unzip->setObjectName(u8("unzip"));
-        m_unzip->setStyleSheet(u8("QWidget#unzip{border:2px solid black;}"));
-        m_unzip->setAttribute(Qt::WA_StyledBackground, true);
-        auto *ul = new QVBoxLayout(m_unzip);
-        ul->setContentsMargins(GAP, GAP, GAP, GAP);
-        ul->setSpacing(GAP);
-        m_unzipTitle = new QLabel(m_unzip);
-        m_unzipTitle->setFont(fMsg);
-        m_unzipTitle->setWordWrap(true);
-        m_unzipTitle->setTextFormat(Qt::PlainText);
-        ul->addWidget(m_unzipTitle);
-        auto *urow = new QHBoxLayout();
-        urow->setSpacing(GAP);
-        auto *bUz    = makeButton(urow, fBtn, "Распаковать", BTN_HEIGHT, 1);
-        auto *bUzDel = makeButton(urow, fBtn, "Распаковать, архив в корзину", BTN_HEIGHT, 1);
-        auto *bUzNo  = makeButton(urow, fBtn, "Отмена", BTN_HEIGHT, 1);
-        ul->addLayout(urow);
-        m_unzip->hide();
-        lay->addWidget(m_unzip);
-        connect(bUz,    &QPushButton::clicked, [this]() { unzipFile(m_zipPath, false); });
-        bUzDel->setVisible(TRASH_ENABLED);
-        connect(bUzDel, &QPushButton::clicked, [this]() { unzipFile(m_zipPath, true); });
-        connect(bUzNo,  &QPushButton::clicked, [this]() { m_unzip->hide(); });
-
         // Сообщение об ошибке: скрыто, показывается на 4 с
         m_msg = new QLabel(this);
         m_msg->setFont(fMsg);
@@ -2887,7 +2861,7 @@ private:
     // Теперь подписи переносятся по словам/символам, а высота кнопок подстраивается.
     void fitButtonFont() {
         const int btnW  = (width() - 2 * GAP - 3 * GAP) / 4;   // 4 кнопки в ряд
-        const int wideW = (width() - 2 * GAP - 2 * GAP) / 3;   // широкие ряды (настройки, распаковка)
+        const int wideW = (width() - 2 * GAP - 2 * GAP) / 3;   // широкие ряды настроек
         const int inner = btnW - 2 * BTN_MARGIN - 4;
         if (inner <= 0 || m_faces.isEmpty()) return;
         QFont f = m_faces.first()->font();
@@ -3192,7 +3166,6 @@ private:
 
     // Прочитать текущую папку и заполнить список
     void load() {
-        if (m_unzip) m_unzip->hide();
         m_pathLabel->setText(m_path);
         m_fileCount = 0; m_dirCount = 0; m_pageIndex = 0; m_pageStarts.clear();
         m_list->clear();
@@ -3320,71 +3293,14 @@ private:
             load();
             return;
         }
-        // Архив .zip — предложить распаковать
+        // Until a safe extractor is implemented, never hand archives to an
+        // external unzip program or offer to move them to the trash.
         if (path.endsWith(u8(".zip"), Qt::CaseInsensitive)) {
-            m_zipPath = path;
-            m_unzipTitle->setText(u8("Распаковать «") + QFileInfo(path).fileName() + u8("» в эту папку?"));
-            m_info->hide();
-            m_unzip->show();
+            showMessage(u8("Распаковка ZIP временно недоступна: требуется защита содержимого"));
             return;
         }
         // Файл — открыть читалкой, выбранной в Kobalt («Автоматически открывать книги в Kobalt»)
         openFile(path);
-    }
-
-    // Распаковка .zip в текущую папку: busybox unzip во временную папку (с точкой — Nickel её
-    // не индексирует), затем перенос содержимого рядом с архивом; при совпадении имён — «имя (1)».
-    // Архив по желанию — в корзину kobrowse.
-    void unzipFile(const QString &zip, bool trashZip) {
-        m_unzip->hide();
-        const QFileInfo zi(zip);
-        const QString dir = zi.absolutePath();
-        if (!safeLocalPath(m_root, zip) || !safeLocalPath(m_root, dir) || isProtected(dir)) {
-            showMessage(u8("Распаковка здесь запрещена")); return;
-        }
-        if (trashZip && (!safeLocalPath(m_root, m_trash, true) || !QDir().mkpath(m_trash)
-                         || !safeLocalPath(m_root, m_trash))) {
-            showMessage(u8("Корзина недоступна")); return;
-        }
-        const QString tmp = dir + u8("/.kobrowse_unzip_")
-                          + QDateTime::currentDateTime().toString(u8("yyyyMMdd-hhmmss"));
-        if (!safeLocalPath(m_root, tmp, true) || QFileInfo(tmp).exists()
-            || !QDir().mkdir(tmp) || !safeLocalPath(m_root, tmp)) {
-            showMessage(u8("Не удалось создать временную папку")); return;
-        }
-        QProcess pr;
-        pr.start(u8("/usr/bin/unzip"), QStringList() << u8("-o") << u8("-q") << zip << u8("-d") << tmp);
-        const bool ok = pr.waitForFinished(180000) && pr.exitStatus() == QProcess::NormalExit
-                        && pr.exitCode() == 0;
-        if (!ok) {
-            klog(u8("unzip failed: ") + QString::fromLocal8Bit(pr.readAllStandardError()));
-            QDir(tmp).removeRecursively();
-            showMessage(u8("Не удалось распаковать архив"));
-            return;
-        }
-        int n = 0;
-        QString first;
-        const QFileInfoList items = QDir(tmp).entryInfoList(
-            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
-        for (const QFileInfo &fi : items) {
-            const QString dst = uniqueName(dir, fi.fileName(), fi.isDir());
-            if (QDir().rename(fi.absoluteFilePath(), dst)) { ++n; if (first.isEmpty()) first = dst; }
-        }
-        QDir(tmp).removeRecursively();
-        if (trashZip && n > 0) {
-            QDir().mkpath(m_trash);
-            const QString stamp = QDateTime::currentDateTime().toString(u8("yyyyMMdd-hhmmss_"));
-            QDir().rename(zip, uniqueName(m_trash, stamp + zi.fileName(), false));
-            m_clip.removeAll(zip);
-        }
-        ::sync();
-        klog(u8("unzip %1: %2 item(s)").arg(zi.fileName()).arg(n));
-        load();
-        showMessage(n ? u8("Распаковано: %1").arg(n) : u8("Архив пуст"));
-        if (n == 1) {                      // показать распакованный файл
-            m_lastMarked = first;
-            ensureMarkedVisible();
-        }
     }
 
     // Открыть книгу. Окно менеджера сначала прячется (иначе останется поверх читалки);
@@ -3717,9 +3633,6 @@ private:
     QList<QPushButton *> m_stepBtns;    // кнопки «−»/«+» по строкам: 0,1 — строка 0; 2,3 — строка 1 …
     QStringList   m_setVals;            // редактируемые значения (как в kobrowse.ini)
     QStringList   m_fonts;              // гарнитуры для выбора
-    QWidget      *m_unzip = nullptr;    // панель «Распаковать архив?»
-    QLabel       *m_unzipTitle = nullptr;
-    QString       m_zipPath;
     QTreeWidget  *m_actions = nullptr;
     QWidget      *m_confirm = nullptr;
     QLabel       *m_confirmText = nullptr;

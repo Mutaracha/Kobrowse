@@ -87,7 +87,12 @@ int main(int argc, char **argv) {
     require(protectedLocalPath(root, root + "/.kobo/Kobo"), "system subtree protected");
     require(protectedLocalPath(root, root + "/.adds/app/file"), "plugin subtree protected");
     require(protectedLocalPath(root, root + "/.kobrowse_trash/item"), "trash subtree protected");
+    require(protectedLocalPath(root, root + "/.KOBO/Kobo"), "system subtree protected ignoring case");
+    require(protectedLocalPath(root, root + "/.AddS/app"), "plugin subtree protected ignoring case");
+    require(protectedLocalPath(root, root + "/.KOBROWSE_TRASH/item"), "trash subtree protected ignoring case");
     require(!protectedLocalPath(root, root + "/.kobo-images"), "prefix sibling not protected");
+    require(!protectedLocalPath(root, root + "/Books/.kobo"), "nested same name not system root");
+    require(!protectedLocalPath(root, root + "-other/.kobo"), "outside prefix not protected");
     require(::symlink(tmp.path().toLocal8Bit().constData(), (root + "/outside").toLocal8Bit().constData()) == 0, "outside link");
     require(::symlink((root + "/.kobo").toLocal8Bit().constData(), (root + "/alias").toLocal8Bit().constData()) == 0, "protected link");
     require(::symlink("missing", (root + "/dangling").toLocal8Bit().constData()) == 0, "dangling link");

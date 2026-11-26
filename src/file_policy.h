@@ -76,12 +76,17 @@ inline bool safeLocalPath(const QString &root, const QString &path, bool allowMi
 }
 
 // These directories remain visible, but operations must not modify their contents.
+// Kobo's FAT volume resolves differently-cased names to the same entry, so
+// compare the first component without case even on case-sensitive test hosts.
 inline bool protectedLocalPath(const QString &root, const QString &path) {
     const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
     const QString target = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-    return target == base || pathWithin(target, base + QLatin1String("/.kobo"))
-        || pathWithin(target, base + QLatin1String("/.adds"))
-        || pathWithin(target, base + QLatin1String("/.kobrowse_trash"));
+    if (target == base) return true;
+    if (!pathWithin(target, base)) return false;
+    const QString first = target.mid(base.size() + 1).section(QLatin1Char('/'), 0, 0);
+    return first.compare(QLatin1String(".kobo"), Qt::CaseInsensitive) == 0
+        || first.compare(QLatin1String(".adds"), Qt::CaseInsensitive) == 0
+        || first.compare(QLatin1String(".kobrowse_trash"), Qt::CaseInsensitive) == 0;
 }
 
 // Preflight copies before creating anything; never follow links, including nested ones.

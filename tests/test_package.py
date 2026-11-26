@@ -42,22 +42,48 @@ class PackageTest(unittest.TestCase):
         self.assertIn('LIBRARY  := libkobrowse.so', makefile)
         self.assertIn('res/nm_kobrowse:/mnt/onboard/.adds/nm/kobrowse', makefile)
 
-    def test_rejects_extra_files_and_wrong_binary(self):
-        for extra, binary in [(True, ARM_SO), (False, b'wrong')]:
-            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as tmp:
+    def test_rejects_invalid_members_and_content(self):
+        plugin = './usr/local/Kobo/imageformats/libkobrowse.so'
+        menu = './mnt/onboard/.adds/nm/kobrowse'
+        cases = ('extra', 'missing', 'duplicate', 'symlink', 'mode', 'owner',
+                 'wrong_binary', 'wrong_arch', 'wrong_menu')
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 path = pathlib.Path(tmp) / 'bad.tgz'
                 with tarfile.open(path, 'w:gz') as archive:
-                    files = {'./usr/local/Kobo/imageformats/libkobrowse.so': binary,
-                             './mnt/onboard/.adds/nm/kobrowse': b'touch /tmp/kobrowse.open'}
-                    if extra:
-                        files['./unexpected'] = b'x'
-                    for name, data in files.items():
+                    files = [(plugin, ARM_SO), (menu, b'touch /tmp/kobrowse.open')]
+                    if case == 'extra':
+                        files.append(('./unexpected', b'x'))
+                    elif case == 'missing':
+                        files.pop()
+                    elif case == 'duplicate':
+                        files.append((menu[2:], b'touch /tmp/kobrowse.open'))
+                    elif case == 'wrong_binary':
+                        files[0] = (plugin, b'wrong')
+                    elif case == 'wrong_arch':
+                        files[0] = (plugin, ARM_SO[:18] + b'\x3e\x00')
+                    elif case == 'wrong_menu':
+                        files[1] = (menu, b'other menu')
+                    for name, data in files:
                         info = tarfile.TarInfo(name)
-                        info.mode = 0o644
-                        info.size = len(data)
-                        archive.addfile(info, io.BytesIO(data))
+                        info.mode = 0o600 if case == 'mode' and name == plugin else 0o644
+                        info.uid = 1 if case == 'owner' and name == plugin else 0
+                        if case == 'symlink' and name == plugin:
+                            info.type = tarfile.SYMTYPE
+                            info.linkname = '/tmp/target'
+                            archive.addfile(info)
+                        else:
+                            info.size = len(data)
+                            archive.addfile(info, io.BytesIO(data))
                 with self.assertRaises(ValueError):
                     checker.check(path)
+
+    def test_rejects_truncated_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / 'bad.tgz'
+            path.write_bytes(b'not an archive')
+            with self.assertRaises(tarfile.TarError):
+                checker.check(path)
 
 
 if __name__ == '__main__':
