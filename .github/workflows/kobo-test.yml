@@ -29,7 +29,13 @@ jobs:
           fi
           cat build/filesystem-test.log
       - name: Test protected folders on disposable FAT image
-        run: bash tests/run-fat-policy-tests.sh
+        run: |
+          if ! bash tests/run-fat-policy-tests.sh > build/fat-test.log 2>&1; then
+            cat build/fat-test.log
+            tail -n 15 build/fat-test.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/fat-test.log
       - name: Test whole-row pagination (offscreen)
         run: bash tests/run-pagination-ui-tests.sh
       - name: Test ZIP creation

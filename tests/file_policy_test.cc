@@ -173,7 +173,8 @@ int main(int argc, char **argv) {
     require(readOnlyLocalEntry(root, trash, root + "/.adds/app"), "system contents shown as read-only");
     require(readOnlyLocalEntry(root, trash, trash), "trash root shown as read-only");
     require(!readOnlyLocalEntry(root, trash, trash + "/nested"), "trash contents remain selectable");
-    for (const QString &protectedEntry : QStringList() << root + "/.kobo" << root + "/.adds" << trash) {
+    const QStringList protectedEntries = QStringList() << root + "/.kobo" << root + "/.adds" << trash;
+    for (const QString &protectedEntry : protectedEntries) {
         QString error;
         require(!mayDeleteLocalEntry(root, trash, protectedEntry), "protected folder deletion denied");
         require(!renameLocalEntry(root, protectedEntry, "renamed-system", error), "protected folder rename denied");
