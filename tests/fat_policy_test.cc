@@ -36,8 +36,11 @@ int main(int argc, char **argv) {
     }
     ::close(fd);
     require(shortNames.contains(".kobrowse_trash"), "trash has actual FAT short alias");
-    const QStringList paths = QStringList() << root + "/.kobo" << root + "/.KOBO"
-        << root + "/.adds" << root + "/.ADDS" << trash << root + "/" + shortNames.value(".kobrowse_trash");
+    QStringList paths = QStringList() << root + "/.kobo" << root + "/.KOBO"
+        << root + "/.adds" << root + "/.ADDS" << trash;
+    const char *const protectedNames[] = { ".kobo", ".adds", ".kobrowse_trash" };
+    for (const char *name : protectedNames)
+        if (shortNames.contains(QLatin1String(name))) paths << root + "/" + shortNames.value(QLatin1String(name));
     for (const QString &path : paths) {
         QString error;
         require(QFileInfo(path).isDir(), "protected spelling resolves on FAT");
