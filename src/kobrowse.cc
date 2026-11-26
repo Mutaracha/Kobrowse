@@ -2387,6 +2387,7 @@ public:
         m_actions->setSelectionMode(QAbstractItemView::NoSelection);
         m_actions->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_actions->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        m_actions->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         m_actions->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
                                    "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"));
         m_actions->hide();
@@ -2479,8 +2480,8 @@ public:
 
 protected:
     // Касания обрабатываем сами: TouchBegin нужно принять, иначе TouchEnd не придёт.
-    // Касание с дочернего виджета (кнопка, список) поднимается сюда. По TouchEnd смотрим
-    // длительность: короткое — нажатие, от LONG_TAP_MS — долгое (выбор строки).
+    // Касание с дочернего виджета (кнопка, список) поднимается сюда. Таймер
+    // отмечает строку при удержании; TouchEnd обрабатывает только короткое нажатие.
     bool event(QEvent *e) override {
         const QEvent::Type t = e->type();
         if (m_logLeft > 0 && t != QEvent::Paint && t != QEvent::UpdateRequest) {
@@ -2531,7 +2532,13 @@ protected:
             m_menuTouch = m_actions->isVisible()
                 && m_actions->viewport()->rect().contains(m_actions->viewport()->mapFrom(this, p));
             m_menuScrollStart = m_actions->verticalScrollBar()->value();
-            if (!m_menuTouch && !m_confirm->isVisible() && inList(p)) {
+            if (pts.size() >= 2) {
+                m_twoFinger = true;
+                m_twoStartY = (mapFromGlobal(pts.at(0).screenPos().toPoint()).y()
+                               + mapFromGlobal(pts.at(1).screenPos().toPoint()).y()) / 2.0;
+                m_scrollStart = m_list->verticalScrollBar()->value();
+            }
+            if (pts.size() == 1 && !m_menuTouch && !m_confirm->isVisible() && inList(p)) {
                 QTreeWidgetItem *item = m_list->itemAt(m_list->viewport()->mapFrom(this, p));
                 if (item && !item->data(0, ROLE_PARENT).toBool()) {
                     m_holdPath = item->data(0, ROLE_PATH).toString();
