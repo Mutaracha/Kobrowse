@@ -19,8 +19,11 @@ static int row(const char *key) {
 class SettingsUiTest {
 public:
     static void run(KobrowseWindow &w, const QString &homeFile) {
+        w.resize(768, 1024);
         w.show(); QApplication::processEvents();
         w.showSettings(true); QApplication::processEvents();
+        require(w.width() == 768, "settings fit a 768 pixel window");
+        require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "general tab fits without horizontal scrolling");
         for (int i = 0; i < SET_COUNT; ++i) {
             require(settingGroup(u8(SET_ITEMS[i].key)) != GroupUnknown, "every setting assigned to a group");
             require(w.m_settingRows[i] && w.m_settingLines[i], "every setting has a widget");
@@ -35,6 +38,7 @@ public:
         require(!w.m_groupBodies[GroupAppearanceAdvanced]->isVisible(), "advanced appearance collapsed");
         w.m_advancedButtons[GroupAppearanceAdvanced]->click(); QApplication::processEvents();
         require(w.m_groupBodies[GroupAppearanceAdvanced]->isVisible(), "advanced appearance expands");
+        require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "expanded view tab fits without horizontal scrolling");
         w.m_advancedButtons[GroupAppearanceAdvanced]->click(); QApplication::processEvents();
         require(!w.m_groupBodies[GroupAppearanceAdvanced]->isVisible(), "advanced appearance collapses");
         QPushButton *resetTab = w.findChild<QPushButton *>("resetTab");
@@ -53,6 +57,7 @@ public:
         require(!w.m_groupBodies[GroupKeyboard]->isVisible(), "keyboard group starts collapsed");
         w.m_advancedButtons[GroupKeyboard]->click(); QApplication::processEvents();
         require(w.m_groupBodies[GroupKeyboard]->isVisible(), "keyboard group expands");
+        require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "expanded fonts tab fits without horizontal scrolling");
         const int key = row("key_font_pt");
         w.m_setVals[key] = "0"; w.refreshSettings();
         require(w.m_setLabels[key]->text().startsWith(QString::fromUtf8("Авто\n")), "zero displays auto");
