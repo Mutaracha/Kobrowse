@@ -93,6 +93,19 @@ int main(int argc, char **argv) {
     require(!protectedLocalPath(root, root + "/.kobo-images"), "prefix sibling not protected");
     require(!protectedLocalPath(root, root + "/Books/.kobo"), "nested same name not system root");
     require(!protectedLocalPath(root, root + "-other/.kobo"), "outside prefix not protected");
+    // Hard-linked files model two names for the same inode on this test host.
+    // Real FAT short-name aliases for directories also need a device test.
+    const QString aliasRoot = tmp.path() + "/identity-root";
+    require(QDir().mkpath(aliasRoot), "identity fixture root");
+    writeFile(aliasRoot + "/.kobrowse_trash", "protected fixture");
+    require(::link(QFile::encodeName(aliasRoot + "/.kobrowse_trash").constData(),
+                   QFile::encodeName(aliasRoot + "/SHORT_ALIAS").constData()) == 0, "identity alias fixture");
+    require(protectedLocalPath(aliasRoot, aliasRoot + "/SHORT_ALIAS"), "protected identity alias rejected");
+    require(protectedLocalPath(aliasRoot, aliasRoot + "/SHORT_ALIAS/child"), "alias subtree rejected");
+    QString aliasError;
+    require(!renameLocalEntry(aliasRoot, aliasRoot + "/SHORT_ALIAS", "renamed", aliasError),
+            "cannot rename a protected identity alias");
+    require(QFileInfo(aliasRoot + "/SHORT_ALIAS").exists(), "identity alias preserved");
     require(::symlink(tmp.path().toLocal8Bit().constData(), (root + "/outside").toLocal8Bit().constData()) == 0, "outside link");
     require(::symlink((root + "/.kobo").toLocal8Bit().constData(), (root + "/alias").toLocal8Bit().constData()) == 0, "protected link");
     require(::symlink("missing", (root + "/dangling").toLocal8Bit().constData()) == 0, "dangling link");

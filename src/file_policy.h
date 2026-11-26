@@ -8,6 +8,7 @@
 #include <QString>
 #include <algorithm>
 #include <dirent.h>
+#include <sys/stat.h>
 
 // Qt on some Kobo firmware omits entries even with QDir::Hidden. Supplement
 // the Qt listing from readdir only when hidden items are requested. Never use
@@ -76,17 +77,30 @@ inline bool safeLocalPath(const QString &root, const QString &path, bool allowMi
 }
 
 // These directories remain visible, but operations must not modify their contents.
-// Kobo's FAT volume resolves differently-cased names to the same entry, so
-// compare the first component without case even on case-sensitive test hosts.
+// Compare both the spelling and the filesystem identity of the root component:
+// on FAT, a differently cased or short 8.3 name may refer to the same entry.
+// Callers must still reject symlinks and concurrent path replacement separately.
 inline bool protectedLocalPath(const QString &root, const QString &path) {
     const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
     const QString target = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
     if (target == base) return true;
     if (!pathWithin(target, base)) return false;
     const QString first = target.mid(base.size() + 1).section(QLatin1Char('/'), 0, 0);
-    return first.compare(QLatin1String(".kobo"), Qt::CaseInsensitive) == 0
-        || first.compare(QLatin1String(".adds"), Qt::CaseInsensitive) == 0
-        || first.compare(QLatin1String(".kobrowse_trash"), Qt::CaseInsensitive) == 0;
+    const char *const protectedNames[] = { ".kobo", ".adds", ".kobrowse_trash" };
+    for (const char *name : protectedNames)
+        if (first.compare(QLatin1String(name), Qt::CaseInsensitive) == 0) return true;
+
+    struct stat candidate;
+    if (::lstat(QFile::encodeName(base + QLatin1Char('/') + first).constData(), &candidate) != 0)
+        return false;
+    for (const char *name : protectedNames) {
+        struct stat guarded;
+        const QByteArray guardedPath = QFile::encodeName(base + QLatin1Char('/') + QLatin1String(name));
+        if (::lstat(guardedPath.constData(), &guarded) == 0
+            && candidate.st_dev == guarded.st_dev && candidate.st_ino == guarded.st_ino)
+            return true;
+    }
+    return false;
 }
 
 // Preflight copies before creating anything; never follow links, including nested ones.
