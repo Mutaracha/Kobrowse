@@ -38,7 +38,7 @@ class SettingsUiTest {
         model.setData(index, QString::fromUtf8("folder"), Qt::DisplayRole);
         model.setData(index, true, ROLE_DIR);
         QStyleOptionViewItem option; option.rect = QRect(0, 0, 400, 90);
-        const QPoint inside(6 + ICON_PX / 2, 10 + ICON_PX / 2);
+        const QPoint inside(6 + ICON_PX, 10 + ICON_PX);
         for (int mode = 0; mode < 3; ++mode) {
             model.setData(index, mode == 1, ROLE_READONLY);
             model.setData(index, mode == 2, ROLE_MARK);
@@ -56,7 +56,7 @@ class SettingsUiTest {
             w.resize(width, 1024); QApplication::processEvents();
             const QString shown = w.m_fileDelegate->displayedName(index);
             require(!shown.contains(QLatin1Char('\n')), "file name remains a single line");
-            const int available = w.m_list->viewport()->width() - qMax(16, ICON_PX) - 18;
+            const int available = w.m_list->viewport()->width() - qMax(32, 2 * ICON_PX) - 18;
             require(QFontMetrics(w.m_list->font()).width(shown) <= available, "elided name fits viewport");
             if (shown != name) require(shown.endsWith(QString::fromUtf8(".epub")), "elision preserves extension");
         }
@@ -125,6 +125,11 @@ class SettingsUiTest {
         require(!QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book")).exists(), "cancel leaves archive untouched");
         w.onItem(&item);
         w.findChild<QPushButton *>("confirmYes")->click();
+        require(w.m_busy && w.m_workOverlay->isVisible(), "extract shows busy message");
+        touch(w, QEvent::TouchBegin, QPoint(1, 1)); touch(w, QEvent::TouchEnd, QPoint(1, 1));
+        require(w.m_busy && w.m_workOverlay->isVisible(), "busy overlay blocks touch");
+        w.m_workTimer.stop(); QMetaObject::invokeMethod(&w.m_workTimer, "timeout", Qt::DirectConnection);
+        require(!w.m_busy && !w.m_workOverlay->isVisible(), "extract closes busy message");
         require(QFileInfo(archive).exists(), "UI extraction preserves archive");
         require(QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book/fixture-book.txt")).exists(),
                 "UI extraction publishes contents");
@@ -233,6 +238,8 @@ public:
         w.m_emptyTrashButton->click(); require(w.m_confirm->isVisible(), "empty trash asks for confirmation");
         w.findChild<QPushButton *>("confirmNo")->click(); require(QFileInfo(trashFixture).exists(), "cancel keeps trash");
         w.m_emptyTrashButton->click(); w.findChild<QPushButton *>("confirmYes")->click();
+        require(w.m_busy && w.m_workOverlay->isVisible(), "empty trash shows busy message");
+        w.m_workTimer.stop(); QMetaObject::invokeMethod(&w.m_workTimer, "timeout", Qt::DirectConnection);
         require(!QFileInfo(trashFixture).exists(), "confirmed empty trash removes fixture");
         w.goUp(); QApplication::processEvents(); require(!w.m_emptyTrashButton->isVisible(), "empty trash button hidden elsewhere");
         w.showSettings(true); QApplication::processEvents();
@@ -250,8 +257,10 @@ public:
         for (int screenWidth : {600, 768, 1180}) {
             w.resize(screenWidth, 1024); QApplication::processEvents();
             require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings never overflow horizontally");
-            const QLabel *range = w.m_setLabels[hold];
-            require(range->width() >= QFontMetrics(range->font()).width(QString::fromUtf8("150–3000")), "hold range fully fits");
+            const QLabel *rangeLow = w.findChild<QLabel *>(QString("rangeLow_%1").arg(hold));
+            const QLabel *rangeHigh = w.findChild<QLabel *>(QString("rangeHigh_%1").arg(hold));
+            require(rangeLow && rangeHigh && rangeLow->text() == "150" && rangeHigh->text() == "3000", "slider endpoints labelled");
+            require(w.m_setLabels[hold]->text().contains(QString::fromUtf8("400 мс")), "slider value appears next to title");
             const ButtonFace *face = reset->findChild<ButtonFace *>();
             require(face && face->width() >= QFontMetrics(face->font()).width(face->text()) + 2 * BTN_MARGIN,
                     "reset button label fits without clipping");
@@ -267,10 +276,12 @@ public:
         w.stepSetting(adds, 1); yes->click(); require(ALLOW_ADDS, "confirmation persists adds");
         QPushButton *choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(books));
         require(choice, "current book choice is clickable"); choice->click();
+        require(w.m_pickerShade->isVisible(), "picker shades background");
         require(w.m_fontPicker->isVisible() && w.m_fontPicker->currentItem()
             && w.m_fontPicker->currentItem()->isSelected() && w.m_fontPicker->topLevelItemCount() == 3,
             "current choice selected and no cancel item");
         w.chooseFont(w.m_fontPicker->topLevelItem(2)); require(OPEN_BOOKS == "0", "book choice applies immediately");
+        require(!w.m_pickerShade->isVisible(), "picker shade hides after selection");
         w.setSettingsTab(1); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "font tab fits screen");
         choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(family));
