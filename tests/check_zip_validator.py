@@ -52,6 +52,7 @@ class ZipValidatorTest(unittest.TestCase):
         self.check(make_zip([('books/', b''), ('books/книга.fb2', b'hello' * 20000), ('empty', b'')]), True)
         self.check(make_zip([('plain.txt', b'stored')], zipfile.ZIP_STORED), True)
         (self.root / 'example').write_bytes(b'hello' * 5000)
+        self.archive.unlink()
         result = subprocess.run([WRITER, str(self.root), str(self.archive), str(self.root / 'example')], stderr=subprocess.PIPE)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.check(self.archive.read_bytes(), True)
