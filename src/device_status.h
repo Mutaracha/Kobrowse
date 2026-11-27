@@ -9,6 +9,13 @@
 #include <QTimer>
 #include <QGuiApplication>
 
+#ifndef KOBROWSE_BUILD_NUMBER
+#define KOBROWSE_BUILD_NUMBER "local"
+#endif
+#ifndef KOBROWSE_BUILD_COMMIT
+#define KOBROWSE_BUILD_COMMIT "unknown"
+#endif
+
 struct BatteryStatus { int percent; bool charging; };
 inline BatteryStatus readBatteryStatus(const QString &directory) {
     BatteryStatus result = { -1, false };
@@ -57,6 +64,8 @@ public:
         : QWidget(parent), powerDirectory(powerDirectory) {
         QHBoxLayout *row = new QHBoxLayout(this); row->setContentsMargins(0, 0, 0, 0);
         m_clock = new QLabel(this); m_clock->setObjectName(QLatin1String("statusClock")); row->addWidget(m_clock); row->addStretch(1);
+        m_build = new QLabel(QString::fromLatin1("#%1 %2").arg(QLatin1String(KOBROWSE_BUILD_NUMBER), QLatin1String(KOBROWSE_BUILD_COMMIT)), this);
+        m_build->setObjectName(QLatin1String("statusBuild")); row->addWidget(m_build); row->addStretch(1);
         m_battery = new QLabel(this); m_battery->setObjectName(QLatin1String("statusBattery")); row->addWidget(m_battery);
         m_icon = new BatteryIcon(this); row->addWidget(m_icon);
         connect(&timer, &QTimer::timeout, this, [this]() { refresh(); });
@@ -73,6 +82,7 @@ public:
         const QString style = QString::fromLatin1("font-family: \"%1\"; font-size: %2px; font-weight: normal;")
             .arg(family).arg(font.pixelSize());
         m_clock->setFont(font); m_clock->setStyleSheet(style);
+        m_build->setFont(font); m_build->setStyleSheet(style);
         m_battery->setFont(font); m_battery->setStyleSheet(style);
     }
     void setScale(qreal scale) {
@@ -90,7 +100,7 @@ public:
     }
 private:
     QString powerDirectory;
-    QLabel *m_clock = nullptr, *m_battery = nullptr;
+    QLabel *m_clock = nullptr, *m_build = nullptr, *m_battery = nullptr;
     BatteryIcon *m_icon = nullptr;
     QTimer timer;
 };

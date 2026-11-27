@@ -5,7 +5,10 @@ override LIBRARY  := libkobrowse.so
 override SOURCES  += src/kobrowse.cc src/zip_writer.cc src/zip_validator.cc src/zip_extract.cc
 override PKGCONF  += Qt5Widgets
 override LDFLAGS  += -lz
+KOBROWSE_BUILD_NUMBER ?= local
+KOBROWSE_BUILD_COMMIT ?= unknown
 override CXXFLAGS += -Wall -Wextra -Wno-missing-field-initializers
+override CXXFLAGS += -DKOBROWSE_BUILD_NUMBER=\"$(KOBROWSE_BUILD_NUMBER)\" -DKOBROWSE_BUILD_COMMIT=\"$(KOBROWSE_BUILD_COMMIT)\"
 override SKIPCONFIGURE += package
 override KOBOROOT += res/nm_kobrowse:/mnt/onboard/.adds/nm/kobrowse
 override KOBOROOT += res/uninstall_marker:/mnt/onboard/.adds/kobrowse/uninstall

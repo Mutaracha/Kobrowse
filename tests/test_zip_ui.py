@@ -11,8 +11,8 @@ class ZipUiTest(unittest.TestCase):
         start = source.index('if (path.endsWith(u8(".zip"), Qt::CaseInsensitive))')
         end = source.index('// Файл — открыть читалкой', start)
         branch = source[start:end]
-        self.assertIn('extractZipArchive(', branch)
-        self.assertIn('load();', branch)
+        self.assertIn('showConfirmation();', branch)
+        self.assertIn('extractZipArchive(', source)
         self.assertIn('return;', branch)
         self.assertNotIn('moveToTrash', branch)
         self.assertNotIn('/usr/bin/unzip', source)

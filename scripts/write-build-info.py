@@ -49,6 +49,8 @@ def build_info(image, inspection, require_clean=False):
         raise ValueError('checked-out commit does not match GITHUB_SHA')
     return {
         'format': 1,
+        'build_number': os.environ.get('KOBROWSE_BUILD_NUMBER', 'local'),
+        'display_commit': os.environ.get('KOBROWSE_BUILD_COMMIT', 'unknown'),
         'created_utc': datetime.now(timezone.utc).isoformat(),
         'source': {'commit': revision, 'dirty': dirty, 'status': status.splitlines(),
                    'nickelhook_commit': hook_revision, 'nickelhook_status': hook_status.splitlines()},

@@ -17,12 +17,12 @@ public:
         labelWidth = qMax(fm.width(QString::fromUtf8("файлов:")), fm.width(QString::fromUtf8("папок:"))) + fm.width(QLatin1Char(' '));
         int digitWidth = 0;
         for (char digit = '0'; digit <= '9'; ++digit) digitWidth = qMax(digitWidth, fm.width(QLatin1Char(digit)));
-        // Counters are int; reserve the widest possible non-negative value.
-        setFixedWidth(labelWidth + 10 * digitWidth + 2);
+        digitColumnWidth = digitWidth;
+        updateWidth();
     }
     void setCounts(int files, int folders) {
         if (fileCount == files && folderCount == folders) return;
-        fileCount = files; folderCount = folders; update();
+        fileCount = files; folderCount = folders; updateWidth(); update();
     }
     QSize sizeHint() const override { return QSize(width(), QFontMetrics(font()).lineSpacing() * 2 + 8); }
     QSize minimumSizeHint() const override { return sizeHint(); }
@@ -39,7 +39,11 @@ protected:
         p.drawText(QRect(labelWidth, top + line, width() - labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(folderCount));
     }
 private:
-    int labelWidth = 0, fileCount = -1, folderCount = -1;
+    void updateWidth() {
+        const int digits = qMax(3, qMax(QString::number(qMax(0, fileCount)).size(), QString::number(qMax(0, folderCount)).size()));
+        setFixedWidth(labelWidth + digits * digitColumnWidth + 2);
+    }
+    int labelWidth = 0, digitColumnWidth = 0, fileCount = -1, folderCount = -1;
 };
 
 // Constrain notices to two lines without changing the height of the file list.

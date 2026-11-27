@@ -1878,6 +1878,13 @@ public:
         m_trashButton->setIconScale(1.25); m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
         m_trashButton->setVisible(TRASH_ENABLED); toolbar->addWidget(m_trashButton);
         connect(m_trashButton, &QPushButton::clicked, [this]() { openTrash(); });
+        m_emptyTrashButton = new ChromeButton(I_TRASH, u8("Очистить корзину"), m_toolbar, true);
+        m_emptyTrashButton->setObjectName(u8("emptyTrash"));
+        m_emptyTrashButton->setFont(backFont);
+        m_emptyTrashButton->setMinimumHeight(chromeHeight);
+        m_emptyTrashButton->setFixedWidth(QFontMetrics(backFont).width(u8("Очистить корзину")) + qRound(ICON_PX * 1.25) + 36);
+        m_emptyTrashButton->hide(); toolbar->addWidget(m_emptyTrashButton);
+        connect(m_emptyTrashButton, &QPushButton::clicked, [this]() { requestDeletion(2); });
         toolbar->addWidget(find); toolbar->addWidget(settings);
         connect(back, &QPushButton::clicked, [this]() { close(); });
         connect(find, &QPushButton::clicked, [this]() { ksearch_open(); });
@@ -1959,7 +1966,8 @@ public:
         m_actions->setHeaderHidden(true);
         m_actions->setRootIsDecorated(false);
         m_actions->setIndentation(0);
-        m_actions->setFont(fMsg);
+        QFont menuFont = fMsg; menuFont.setPixelSize(ptToPx(8.5));
+        m_actions->setFont(menuFont);
         m_actions->setFocusPolicy(Qt::NoFocus);
         m_actions->setSelectionMode(QAbstractItemView::NoSelection);
         m_actions->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -2007,7 +2015,7 @@ public:
         connect(confirmYes, &QPushButton::clicked, [this]() { confirmDeletion(); });
         connect(confirmNo, &QPushButton::clicked, [this]() {
             if (m_pendingDelete == 1) clearSelection();
-            m_confirm->hide(); m_pendingDelete = 0; m_confirmSetting = -1;
+            m_confirm->hide(); m_pendingDelete = 0; m_confirmSetting = -1; m_pendingZip.clear();
         });
         m_confirm->hide();
 
@@ -2721,6 +2729,11 @@ private:
         const int action = m_pendingDelete;
         m_pendingDelete = 0;
         m_confirm->hide();
+        if (action == 9) {
+            const QString path = m_pendingZip; m_pendingZip.clear();
+            if (!path.isEmpty()) extractSelectedZip(path);
+            return;
+        }
         if (action == 5 || action == 6) {
             showSettings(false);
             if (action == 6) requestDeletion(2); else openTrash();
@@ -2814,6 +2827,7 @@ private:
 
     // Прочитать текущую папку и заполнить список
     void load() {
+        m_emptyTrashButton->setVisible(m_path == m_trash);
         m_pathLabel->setText(m_path);
         m_fileCount = 0; m_dirCount = 0; m_pageIndex = 0; m_pageStarts.clear();
         m_list->clear();
@@ -2953,19 +2967,24 @@ private:
         // The internal reader stages and verifies the entire archive; the ZIP
         // itself is always kept, whether extraction succeeds or fails.
         if (path.endsWith(u8(".zip"), Qt::CaseInsensitive)) {
-            QString output, error;
-            klog(u8("zip extract start: ") + path);
-            if (!extractZipArchive(m_root, path, output, error, ALLOW_ADDS)) {
-                klog(u8("zip extract failed: ") + error);
-                load(); showMessage(u8("Не удалось распаковать: ") + error);
-            } else {
-                ::sync(); klog(u8("zip extract complete: ") + output);
-                load(); showMessage(u8("Распаковано: ") + QDir(m_path).relativeFilePath(output));
-            }
-            return;
+            m_pendingZip = path; m_pendingDelete = 9;
+            m_confirmText->setText(u8("Распаковать архив «%1»?").arg(QFileInfo(path).fileName()));
+            showConfirmation(); return;
         }
         // Файл — открыть читалкой, выбранной в Kobalt («Автоматически открывать книги в Kobalt»)
         openFile(path);
+    }
+
+    void extractSelectedZip(const QString &path) {
+        QString output, error;
+        klog(u8("zip extract start: ") + path);
+        if (!extractZipArchive(m_root, path, output, error, ALLOW_ADDS)) {
+            klog(u8("zip extract failed: ") + error);
+            load(); showMessage(u8("Не удалось распаковать: ") + error);
+        } else {
+            ::sync(); klog(u8("zip extract complete: ") + output);
+            load(); showMessage(u8("Распаковано: ") + QDir(m_path).relativeFilePath(output));
+        }
     }
 
     // Открыть книгу. Окно менеджера сначала прячется (иначе останется поверх читалки);
@@ -3504,7 +3523,7 @@ private:
         load();
     }
 
-    QString       m_root, m_trash, m_path, m_trashReturn;
+    QString       m_root, m_trash, m_path, m_trashReturn, m_pendingZip;
     std::vector<int> m_pageStarts;
     int m_pageIndex = 0;
     RowDelegate *m_fileDelegate = nullptr;
@@ -3560,7 +3579,7 @@ private:
     bool m_groupExpanded[GroupCount] = {};
     int m_currentSettingsTab = 0, m_resetTabPending = 0;
     QPushButton *m_generalTab = nullptr, *m_fontTab = nullptr;
-    ChromeButton *m_trashButton = nullptr;
+    ChromeButton *m_trashButton = nullptr, *m_emptyTrashButton = nullptr;
     QPushButton *m_resetHomeButton = nullptr, *m_resetTabButton = nullptr;
     QLabel *m_homeStatus = nullptr;
     bool m_resetHomeDraft = false;
@@ -3633,6 +3652,15 @@ static void kobrowse_open() {
 
     loadConfig();                     // kobrowse.ini читается при каждом открытии
     g_win = new KobrowseWindow(host);
+    // Release the overlay before Nickel paints its own sleep view. Connecting
+    // to the signal does not replace Kobalt's power hooks. The window closes;
+    // it is not reopened over a potentially still-visible sleep/PIN screen.
+    typedef QObject *(*PowerManager)();
+    PowerManager power = nsym<PowerManager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
+    QObject *manager = power ? power() : nullptr;
+    const bool sleepConnected = manager && QObject::connect(manager, SIGNAL(aboutToSleep()),
+                                                               g_win.data(), SLOT(close()), Qt::DirectConnection);
+    klog(sleepConnected ? u8("sleep signal connected; window will close") : u8("sleep signal unavailable"));
     g_win->setGeometry(host->rect()); // всё главное окно
     g_win->show();
     g_win->raise();

@@ -14,7 +14,12 @@ fi
 # build cannot accidentally publish a package from an earlier invocation.
 mkdir -p build
 rm -f -- libkobrowse.so build/KoboRoot.tgz build/build-info.json
-"$engine" run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+revision=$(git rev-parse --short=12 HEAD)
+if [[ -n $(git status --porcelain=v1 --untracked-files=normal) ]] || [[ -n $(git -C NickelHook status --porcelain=v1 --untracked-files=normal) ]]; then revision+=-dirty; fi
+number=${GITHUB_RUN_NUMBER:-local}
+[[ $number == local || $number =~ ^[0-9]+$ ]] || { echo 'Invalid build number' >&2; exit 1; }
+export KOBROWSE_BUILD_NUMBER=$number KOBROWSE_BUILD_COMMIT=$revision
+"$engine" run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e KOBROWSE_BUILD_NUMBER -e KOBROWSE_BUILD_COMMIT \
     -v "$root:/work" -w /work --entrypoint bash "$image" -euc 'make -B all && make package'
 python3 scripts/check-package.py build/KoboRoot.tgz libkobrowse.so
 sdk_inspection=$("$engine" image inspect "$image")

@@ -72,10 +72,12 @@ class SettingsUiTest {
         require(w.m_prev->geometry().center().y() == w.m_next->geometry().center().y(), "page controls aligned");
         const int pageX = w.m_pageLabel->x(), pageWidth = w.m_pageLabel->width();
         const int countX = w.m_countLabel->x(), countWidth = w.m_countLabel->width();
-        w.m_pageIndex = 9; w.m_fileCount = 999999; w.m_dirCount = 12345;
+        w.m_pageIndex = 9; w.m_fileCount = 999; w.m_dirCount = 99;
         w.updatePageInfo(); QApplication::processEvents();
         require(w.m_pageLabel->x() == pageX && w.m_pageLabel->width() == pageWidth, "page indicator stays fixed");
-        require(w.m_countLabel->x() == countX && w.m_countLabel->width() == countWidth, "count table stays fixed");
+        require(w.m_countLabel->x() == countX && w.m_countLabel->width() == countWidth, "three-digit count table stays fixed");
+        w.m_fileCount = 999999; w.updatePageInfo(); QApplication::processEvents();
+        require(w.m_countLabel->width() > countWidth, "larger counts expand without clipping");
         w.m_pageStarts = originalPages; w.m_pageIndex = originalIndex;
         w.m_fileCount = oldFiles; w.m_dirCount = oldDirs; w.updatePageInfo();
     }
@@ -117,6 +119,12 @@ class SettingsUiTest {
         require(createZipArchive(w.m_root, archive, QStringList() << source, error), "create UI extract fixture");
         QTreeWidgetItem item; item.setData(0, ROLE_PATH, archive); item.setData(0, ROLE_DIR, false);
         w.onItem(&item);
+        require(w.m_confirm->isVisible(), "extract asks before writing");
+        require(!QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book")).exists(), "no extraction before confirmation");
+        w.findChild<QPushButton *>("confirmNo")->click();
+        require(!QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book")).exists(), "cancel leaves archive untouched");
+        w.onItem(&item);
+        w.findChild<QPushButton *>("confirmYes")->click();
         require(QFileInfo(archive).exists(), "UI extraction preserves archive");
         require(QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book/fixture-book.txt")).exists(),
                 "UI extraction publishes contents");
@@ -190,8 +198,11 @@ public:
         QLabel *batteryLabel = w.m_deviceStatus->findChild<QLabel *>("statusBattery");
         require(clock && batteryLabel && clock->font().pixelSize() == 26 && batteryLabel->font().pixelSize() == 26,
                 "status labels use explicit compact font");
-        require(clock->font().family() == batteryLabel->font().family() && !clock->styleSheet().isEmpty(),
+        QLabel *build = w.m_deviceStatus->findChild<QLabel *>("statusBuild");
+        require(build && build->text().contains("local") && build->font().pixelSize() == clock->font().pixelSize(), "build identity in status row");
+        require(clock->font().family() == batteryLabel->font().family() && build->font().family() == clock->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
+        require(w.m_actions->font().pixelSize() == ptToPx(8.5), "context menu uses 8.5 points");
         testFolderIcons(w); testNames(w); testFooter(w); testTouchFeedback(w);
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
@@ -215,6 +226,15 @@ public:
         w.m_clip.clear(); w.clearSelection();
         testBrightness(w);
         testExtractAndLogging(w);
+        w.openTrash(); QApplication::processEvents();
+        require(w.m_emptyTrashButton->isVisible(), "empty trash button appears in trash");
+        const QString trashFixture = w.m_trash + "/only-fixture";
+        QFile trashFile(trashFixture); require(trashFile.open(QIODevice::WriteOnly), "trash fixture"); trashFile.close();
+        w.m_emptyTrashButton->click(); require(w.m_confirm->isVisible(), "empty trash asks for confirmation");
+        w.findChild<QPushButton *>("confirmNo")->click(); require(QFileInfo(trashFixture).exists(), "cancel keeps trash");
+        w.m_emptyTrashButton->click(); w.findChild<QPushButton *>("confirmYes")->click();
+        require(!QFileInfo(trashFixture).exists(), "confirmed empty trash removes fixture");
+        w.goUp(); QApplication::processEvents(); require(!w.m_emptyTrashButton->isVisible(), "empty trash button hidden elsewhere");
         w.showSettings(true); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings fit screen");
         const int font = row("list_pt"), family = row("list_font"), hold = row("long_tap_ms");
