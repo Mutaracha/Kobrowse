@@ -266,7 +266,8 @@ static void loadConfig() {
     OPEN_BOOKS  = canUpdate ? st.value(u8("kobrowse/open_books")).toString().trimmed().toLower() : QString();
     const double listPt = qBound(7.0, num("list_pt", 8.5, 4, 24), 14.0);
     LIST_PX = ptToPx(listPt);
-    LIST_DETAIL_PX = ptToPx(listPt - 0.5);
+    // The earlier detail font was 3/4 of the list size; reduce it by 0.5 pt.
+    LIST_DETAIL_PX = ptToPx(listPt * 0.75 - 0.5);
     // Fixed Kobo-proportional chrome; legacy appearance keys are preserved but ignored.
     const double uiScale = SCREEN_DPI / 300.0;
     FONT_BTN = qRound(32 * uiScale); FONT_MSG = qRound(30 * uiScale); GAP = qRound(16 * uiScale);
@@ -607,7 +608,8 @@ enum Icon { I_NONE, I_COPY, I_CUT, I_TRASH, I_INFO, I_DESELECT, I_FOLDER_UP, I_C
             I_EYE, I_EYE_OFF, I_CLOSE, I_CLIPBOARD, I_CLIPBOARD_X, I_GEAR, I_BACK, I_SEARCH, I_MORE, I_HOME };
 
 // Рисует иконку в квадрате r; координаты в сетке 24×24 (как у Tabler Icons)
-static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
+static qreal chromeOutlineWidth(qreal scale = 1.0) { return 0.9 * scale; }
+static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c, qreal outlineScale = 1.0) {
     p->save();
     p->setRenderHint(QPainter::Antialiasing, true);
     p->translate(r.topLeft());
@@ -623,7 +625,7 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         p->drawLine(QPointF(4, 12), QPointF(10, 18));
         break;
     case I_HOME: { // Continuous roof and walls, open doorway like the reference.
-        p->setPen(QPen(c, 1.15, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p->setPen(QPen(c, chromeOutlineWidth(outlineScale), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         QPainterPath house; house.moveTo(1.8, 11); house.lineTo(12, 1.8); house.lineTo(22.2, 11);
         house.lineTo(20, 11); house.lineTo(20, 22); house.lineTo(14, 22);
         house.lineTo(14, 15.5); house.lineTo(10, 15.5); house.lineTo(10, 22);
@@ -631,7 +633,7 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         break;
     }
     case I_SEARCH: { // Lens with a curved inner reflection and outlined grip.
-        p->setPen(QPen(c, 0.9, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p->setPen(QPen(c, chromeOutlineWidth(outlineScale), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         QPainterPath lens;
         lens.moveTo(16.2, 13.9);
         lens.cubicTo(18.7, 10.7, 17.8, 5.9, 14.9, 3.5);
@@ -667,7 +669,7 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         p->drawLine(QPointF(15, 15.6), QPointF(7, 4));
         break;
     case I_TRASH: { // Lid, handle and three vertical bars.
-        p->setPen(QPen(c, 1.05, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p->setPen(QPen(c, chromeOutlineWidth(outlineScale), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p->drawRect(QRectF(2.8, 6.4, 18.4, 1.5));
         QPainterPath handle; handle.moveTo(9, 6.3); handle.lineTo(9, 4.9);
         handle.quadTo(9, 3.8, 10.2, 3.8); handle.lineTo(13.8, 3.8);
@@ -743,7 +745,7 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
             gear.quadTo(cur, end);
         }
         gear.closeSubpath();
-        p->setPen(QPen(c, 1.05, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p->setPen(QPen(c, chromeOutlineWidth(outlineScale), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p->drawPath(gear); p->drawEllipse(QPointF(12, 12), 4.5, 4.5);
         break;
     }
@@ -831,7 +833,10 @@ protected:
                                           : qMin(iconSize, qMin(height() - 8, width() - 8));
         if (size <= 0) return;
         const int left = m_text.isEmpty() ? (width() - size) / 2 : (m_framed ? 12 : 4);
-        drawIcon(&p, m_icon, QRectF(left, (height() - size) / 2, size, size), ink);
+        // Enlarging a toolbar icon must not thicken its outline compared with
+        // the search lens, which is drawn at the unscaled toolbar size.
+        const qreal outlineScale = m_largePlainIcon ? qRound(qMin(height(), width()) * 1.08) / qreal(size) : 1.0;
+        drawIcon(&p, m_icon, QRectF(left, (height() - size) / 2, size, size), ink, outlineScale);
         if (!m_text.isEmpty()) {
             p.setPen(ink); p.setFont(font());
             p.drawText(QRect(left + size + 8, 0, width() - left - size - 8, height()),

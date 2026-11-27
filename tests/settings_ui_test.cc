@@ -294,7 +294,7 @@ public:
         require(w.m_sortButtons[0]->font().pixelSize() == qRound(qMax(10, clock->font().pixelSize() * 3 / 4) * 1.5)
                 && w.m_sortButtons[0]->styleSheet().contains("text-align:left")
                 && w.m_sortButtons[0]->styleSheet().contains("padding-right:8px"), "header font enlarged 1.5 times with larger side padding");
-        require(LIST_DETAIL_PX == ptToPx(8.0), "date and size default to half a point below list font");
+        require(LIST_DETAIL_PX == ptToPx(8.5 * .75 - .5), "date and size use three quarters of the default list size minus half a point");
         require(!w.m_pageStarts.empty() && !w.m_pageTimer.isActive(), "visible load paginates before a deferred repaint");
         for (int n = 1; n < 3; ++n) {
             const QString widest = QString::fromUtf8("↓  ") + (n == 1 ? QString::fromUtf8("Дата") : QString::fromUtf8("Размер"));
@@ -330,6 +330,11 @@ public:
         }
         require(trashBottom - trashTop >= (homeBottom - homeTop) * 9 / 10, "trash icon height matches other toolbar icons");
         require(qAbs((trashTop + trashBottom) - (homeTop + homeBottom)) <= 6, "trash icon vertically aligned");
+        const int baseIconSize = qRound(w.m_trashButton->width() * 1.08);
+        const int enlargedIconSize = qRound(w.m_trashButton->width() * 1.08 * 1.18);
+        const qreal referenceWidth = chromeOutlineWidth() * baseIconSize / 24.0;
+        const qreal enlargedWidth = chromeOutlineWidth(baseIconSize / qreal(enlargedIconSize)) * enlargedIconSize / 24.0;
+        require(qAbs(referenceWidth - enlargedWidth) < 0.001, "enlarged trash outline matches search outline in screen pixels");
         require(sleepRecoveryAllowed(true, false, false, false, false), "restore only when native views clear");
         require(!sleepRecoveryAllowed(false, false, false, false, false)
             && !sleepRecoveryAllowed(true, true, false, false, false)
@@ -438,7 +443,8 @@ public:
         w.m_trashButton->click(); QApplication::processEvents();
         require(w.m_path == w.m_root && !w.m_emptyTrashButton->isVisible(), "trash icon closes trash and returns to folder");
         require(saveConfig(QStringList() << "list_pt" << "long_tap_ms", QStringList() << "20" << "1200"), "legacy settings fixture");
-        loadConfig(); require(LIST_PX == ptToPx(14) && LONG_TAP_MS == 700, "legacy settings bounded at runtime");
+        loadConfig(); require(LIST_PX == ptToPx(14) && LIST_DETAIL_PX == ptToPx(14 * .75 - .5)
+                              && LONG_TAP_MS == 700, "legacy settings bounded and detail font scales");
         w.showSettings(true); QApplication::processEvents();
         w.stepSetting(row("show_hidden"), 1);
         QSettings preserved(QString::fromUtf8(KOBROWSE_INI), QSettings::IniFormat);
@@ -578,7 +584,7 @@ public:
         first->click(); require(w.m_setVals[family].isEmpty() && first->isSelected(), "Kobo font applies immediately");
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
-        require(LIST_DETAIL_PX == ptToPx(8.5), "detail font follows list setting minus half a point");
+        require(LIST_DETAIL_PX == ptToPx(9.0 * .75 - .5), "detail font grows proportionally with list setting");
         require(w.m_actions->font().pixelSize() == ptToPx(12) && w.m_actions->font().family() == w.m_list->font().family(),
                 "context menu size remains fixed as list size changes");
         reset->click(); no->click(); require(LIST_PX > beforeFont, "reset cancellation preserves setting");
