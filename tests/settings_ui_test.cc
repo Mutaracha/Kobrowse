@@ -69,6 +69,14 @@ public:
         require(w.m_resetHomeDraft && w.m_setVals[adds] == "0", "general reset disables adds");
         w.showSettings(false); w.showSettings(true);
         require(!w.m_resetHomeDraft && w.m_setVals[adds] == "1", "cancel discards reset draft");
+        const char *savedHome = KOBROWSE_HOME;
+        const QByteArray badHome = (w.m_root + "/.adds").toUtf8(); // a directory cannot be removed as the home file
+        KOBROWSE_HOME = badHome.constData();
+        w.m_resetHomeDraft = true; w.m_setVals[hidden] = "1";
+        w.saveSettings(); QApplication::processEvents();
+        require(w.isVisible() && w.m_showHidden, "saved settings apply even if home reset fails");
+        require(w.m_footerNotice->text().contains(QString::fromUtf8("не удалось")), "partial save failure is reported");
+        KOBROWSE_HOME = savedHome;
         w.close();
     }
 };

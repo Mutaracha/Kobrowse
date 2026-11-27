@@ -3211,9 +3211,7 @@ private:
         QStringList keys;
         for (int i = 0; i < SET_COUNT; ++i) keys << u8(SET_ITEMS[i].key);
         if (!saveConfig(keys, m_setVals)) { showMessage(u8("Не удалось записать kobrowse.ini")); return; }
-        if (m_resetHomeDraft && !resetHomeFolder(u8(KOBROWSE_HOME))) {
-            showMessage(u8("Настройки сохранены, но домашнюю папку сбросить не удалось")); return;
-        }
+        const bool homeResetFailed = m_resetHomeDraft && !resetHomeFolder(u8(KOBROWSE_HOME));
         loadConfig();
         m_showHidden = SHOW_HIDDEN;
         m_idle.setInterval(IDLE_MS); m_idle.start();
@@ -3226,7 +3224,8 @@ private:
         showSettings(false);
         load();
         klog(u8("settings saved and applied without closing"));
-        showMessage(u8("Настройки сохранены"));
+        showMessage(homeResetFailed ? u8("Настройки сохранены, но домашнюю папку сбросить не удалось")
+                                    : u8("Настройки сохранены"));
     }
 
     void goUp() {
