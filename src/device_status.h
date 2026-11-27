@@ -36,15 +36,17 @@ inline BatteryStatus readBatteryStatus(const QString &directory) {
 }
 class BatteryIcon : public QWidget {
 public:
-    explicit BatteryIcon(QWidget *parent = nullptr) : QWidget(parent) { setFixedSize(40, 24); }
+    explicit BatteryIcon(QWidget *parent = nullptr) : QWidget(parent) { setScale(1); }
+    void setScale(qreal scale) { setFixedSize(qMax(1, qRound(32 * scale)), qMax(1, qRound(20 * scale))); }
     void setBattery(BatteryStatus value) {
         if (status.percent != value.percent || status.charging != value.charging) { status = value; update(); }
     }
 protected:
     void paintEvent(QPaintEvent *) override {
-        QPainter p(this); p.setPen(QPen(Qt::black, 2)); p.setBrush(Qt::white);
-        p.drawRect(QRect(1, 3, 33, 18)); p.fillRect(QRect(35, 9, 3, 7), Qt::black);
-        if (status.percent >= 0) p.fillRect(QRect(4, 6, 27 * status.percent / 100, 13), Qt::black);
+        QPainter p(this); p.scale(width() / 32.0, height() / 20.0);
+        p.setPen(QPen(Qt::black, 1.5)); p.setBrush(Qt::white);
+        p.drawRect(QRectF(1, 3, 26, 14)); p.fillRect(QRectF(28, 7, 3, 6), Qt::black);
+        if (status.percent >= 0) p.fillRect(QRectF(3, 5, 22.0 * status.percent / 100, 10), Qt::black);
     }
 private:
     BatteryStatus status = { -1, false };
@@ -62,6 +64,10 @@ public:
             connect(app, &QGuiApplication::applicationStateChanged, this,
                     [this](Qt::ApplicationState state) { if (state == Qt::ApplicationActive) refresh(); });
         timer.start(60000); refresh();
+    }
+    void setScale(qreal scale) {
+        m_icon->setScale(scale);
+        layout()->setSpacing(qMax(2, qRound(5 * scale)));
     }
     void refresh() {
         const QString now = QTime::currentTime().toString(QLatin1String("H:mm"));

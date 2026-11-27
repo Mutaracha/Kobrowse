@@ -114,27 +114,13 @@ struct CfgKey { const char *key, *def, *comment; };
 static const CfgKey CFG_KEYS[] = {
     { "list_pt",       "8",           "кегль списка файлов, пт: 8 = петит, 9 = боргес, 10 = корпус (можно дробное: 8.5)" },
     { "list_font",     "",            "гарнитура списка; пусто — как в Nickel. Примеры: Georgia, Amasis, Kobo Nickel" },
-    { "btn_pt",        "6",           "наибольший кегль подписей кнопок, пт (уменьшается, если слово не влезает)" },
-    { "btn_font",      "Kobo Nickel", "гарнитура подписей кнопок" },
-    { "info_pt",       "6",           "кегль сведений о файле и сообщений, пт" },
-    { "gap_pt",        "6",           "поля от краёв экрана и промежутки между кнопками, пт" },
-    { "btn_pad_pt",    "6",           "поле внутри кнопки слева и справа от подписи, пт" },
-    { "btn_height_pt", "29",          "высота кнопки, пт" },
-    { "icon_pt",       "8",           "размер иконки на кнопке, пт" },
-    { "btn_radius_pt", "3.4",         "скругление углов кнопки, пт (0 — прямые углы)" },
-    { "btn_line_pt",   "0.6",         "толщина рамки кнопки, пт" },
     { "long_tap_ms",   "500",         "долгое нажатие (выбор строки), мс" },
     { "idle_min",      "2",           "закрыть менеджер, если не было касаний, мин" },
     { "allow_adds_edit", "0",       "разрешить изменение содержимого .adds: 1 — да, 0 — только просмотр" },
     { "trash_enabled", "1",           "использовать корзину: 1 — да, 0 — удалять после подтверждения" },
     { "logging_enabled", "1",          "журнал отладки Kobrowse: 1 — вести, 0 — выключить" },
     { "show_hidden",   "1",           "показывать скрытые файлы и папки (с точкой): 1 — да, 0 — нет" },
-    { "scale_pct",     "100",         "общий масштаб интерфейса kobrowse, %: 100 — как на Clara HD (по ширине экрана); 50–200" },
     { "open_books",    "auto",        "открытие книг тапом: auto — только на проверенной прошивке 4.38; 1 — всегда (на свой риск); 0 — никогда" },
-    { "key_font_pt",   "0",           "кегль подписей клавиш поиска, пт; 0 — от высоты клавиши (около 0.52)" },
-    { "func_pt",       "0",           "кегль служебных клавиш поиска (Shift, Space, DelBwd), пт; 0 — от высоты клавиши (около 0.34)" },
-    { "search_list_pt", "10",         "кегль списка результатов поиска, пт (8 = петит, 10 = корпус; можно дробное: 8.5)" },
-    { "search_list_font", "",         "гарнитура списка результатов поиска; пусто — шрифт виджета" },
 };
 
 // Значение по умолчанию для ключа kobrowse.ini
@@ -145,16 +131,25 @@ static QString cfgDefault(const QString &key) {
 
 static int ptToPx(double pt) { return qRound(pt * SCREEN_DPI / 72.0); }
 
-// Масштаб интерфейса для любого ридера Kobo: пропорционально ширине экрана. Образец — Clara HD
-// (1072 px по ширине, 300 dpi): на другом экране кнопки и шрифты занимают ту же долю ширины.
-// Плотности из Qt (physicalDotsPerInch) не доверяем: у платформы Kobo она не проверена.
+// Kobalt scales its 300-ppi design by panel density, not screen width.
+// PRODUCT is provided by Kobo; Qt's generic 96/100 dpi is not panel density.
 static void detectDpi() {
-    SCREEN_DPI = 300;
-    if (QScreen *scr = QGuiApplication::primaryScreen()) {
-        const QSize sz = scr->size();
-        const int w = qMin(sz.width(), sz.height());
-        if (w >= 480 && w <= 4000) SCREEN_DPI = 300.0 * w / 1072.0;
+    struct ModelDensity { const char *prefix; int ppi; };
+    static const ModelDensity models[] = {
+        {"trilogy",167}, {"pika",167}, {"pixie",200}, {"kraken",212},
+        {"phoenix",212}, {"star",212}, {"luna",212}, {"dragon",265},
+        {"dahlia",265}, {"snow",265}, {"europa",227}, {"condor",227},
+        {"alyssum",300}, {"nova",300}, {"goldfinch",300}, {"spa",300},
+        {"storm",300}, {"io",300}, {"monza",300}, {"frost",300},
+        {"cadmus",300}, {"daylight",300}
+    };
+    const QByteArray product = qgetenv("PRODUCT");
+    for (const ModelDensity &model : models) {
+        if (product.startsWith(model.prefix)) { SCREEN_DPI = model.ppi; return; }
     }
+    const QScreen *screen = QGuiApplication::primaryScreen();
+    const qreal dpi = screen ? screen->logicalDotsPerInch() : 0;
+    SCREEN_DPI = dpi >= 150 && dpi <= 400 ? dpi : 300;
 }
 
 // Прочитать kobrowse.ini. Недостающие ключи дописываются в конец файла с пояснениями
@@ -210,30 +205,20 @@ static void loadConfig() {
         const double v = st.value(u8("kobrowse/") + u8(key)).toString().replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
         return (ok && v >= lo && v <= hi) ? v : def;
     };
-    SCREEN_DPI *= num("scale_pct", 100, 50, 200) / 100.0;   // до пересчёта пунктов в пиксели
     OPEN_BOOKS  = st.value(u8("kobrowse/open_books")).toString().trimmed().toLower();
     LIST_PX     = ptToPx(num("list_pt", 8, 4, 24));
-    FONT_BTN    = ptToPx(num("btn_pt", 6, 3, 24));
-    FONT_MSG    = ptToPx(num("info_pt", 6, 3, 14));
-    GAP         = ptToPx(num("gap_pt", 6, 0, 24));
-    BTN_MARGIN  = ptToPx(num("btn_pad_pt", 6, 0, 24));
-    BTN_HEIGHT  = ptToPx(num("btn_height_pt", 29, 12, 60));
-    ICON_PX     = ptToPx(num("icon_pt", 8, 3, 24));
-    BTN_RADIUS  = num("btn_radius_pt", 3.4, 0, 20) * SCREEN_DPI / 72.0;
-    BTN_PEN     = num("btn_line_pt", 0.6, 0.1, 3) * SCREEN_DPI / 72.0;
+    // Fixed Kobo-proportional chrome; legacy appearance keys are preserved but ignored.
+    const double uiScale = SCREEN_DPI / 300.0;
+    FONT_BTN = qRound(32 * uiScale); FONT_MSG = qRound(30 * uiScale); GAP = qRound(16 * uiScale);
+    BTN_MARGIN = qRound(12 * uiScale); BTN_HEIGHT = qRound(72 * uiScale); ICON_PX = qRound(32 * uiScale);
+    BTN_RADIUS = 0; BTN_PEN = qMax(1.0, 2 * uiScale);
     LONG_TAP_MS = int(num("long_tap_ms", 500, 150, 3000));
-    IDLE_MS     = int(num("idle_min", 2, 0.5, 60) * 60000);
-    // Клавиатура поиска: ключ задан и больше нуля — фиксированный кегль, иначе от высоты клавиши.
-    const double kf = num("key_font_pt", 0, 0, 24);
-    KEY_FONT_SET = kf > 0;
-    KEY_FONT_PX  = KEY_FONT_SET ? qMax(8, ptToPx(kf)) : 0;
-    const double ff = num("func_pt", 0, 0, 24);
-    FUNC_FONT_SET = ff > 0;
-    FUNC_PX       = FUNC_FONT_SET ? qMax(8, ptToPx(ff)) : 0;
-    SEARCH_LIST_PX   = ptToPx(num("search_list_pt", 10, 4, 24));
-    SEARCH_LIST_FONT = st.value(u8("kobrowse/search_list_font")).toString().trimmed();
+    IDLE_MS = int(num("idle_min", 2, 0.5, 60) * 60000);
+    KEY_FONT_SET = false; FUNC_FONT_SET = false;
+    KEY_FONT_PX = 0; FUNC_PX = 0;
+    SEARCH_LIST_PX = ptToPx(10); SEARCH_LIST_FONT.clear();
     LIST_FONT   = st.value(u8("kobrowse/list_font")).toString().trimmed();
-    BTN_FONT    = st.value(u8("kobrowse/btn_font")).toString().trimmed();
+    BTN_FONT.clear();
     SHOW_HIDDEN = num("show_hidden", 1, 0, 1) != 0;
     TRASH_ENABLED = num("trash_enabled", 1, 0, 1) != 0;
     ALLOW_ADDS = num("allow_adds_edit", 0, 0, 1) != 0;
@@ -314,6 +299,7 @@ class RowDelegate : public QStyledItemDelegate {
 public:
     RowDelegate(QWidget *view, const QFont &f) : QStyledItemDelegate(view), m_view(view), m_font(f) {}
     void setMaxRowHeight(int height) { m_maxHeight = height; }
+    void setListFont(const QFont &font) { m_font = font; }
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &idx) const override {
         const qreal h = layoutText(idx.data().toString(), fontFor(idx), textWidth());
         const QString detail = idx.data(ROLE_DETAIL).toString();
@@ -327,7 +313,7 @@ public:
         p->save();
         p->fillRect(opt.rect, mark ? Qt::black : Qt::white);
         p->setPen(QPen(itemIconColor(idx.data(ROLE_READONLY).toBool(), mark),
-                       qMax(1, m_font.pixelSize() / 16)));
+                       qMax(1, ICON_PX / 16)));
         p->setBrush(Qt::NoBrush);
         const int sz = iconSize();
         const QRectF r(opt.rect.left() + PAD_H, opt.rect.top() + PAD_V, sz, sz);
@@ -385,7 +371,7 @@ public:
     }
 private:
     enum { PAD_V = 10, PAD_H = 6 };
-    int iconSize() const { return qMax(20, m_font.pixelSize()); }
+    int iconSize() const { return qMax(16, ICON_PX); }
     QFont detailFont() const { QFont f = m_font; f.setPixelSize(qMax(10, m_font.pixelSize() * 3 / 4)); return f; }
     QFont fontFor(const QModelIndex &idx) const {
         QFont f = m_font;
@@ -1695,7 +1681,6 @@ static void krename_open(const QString &name, const std::function<QString(const 
 
 
 static void kobrowse_open();
-static QTimer *g_reopen = nullptr;   // переоткрыть окно после сохранения настроек
 
 // Пункты экрана «Настройки»: ключ kobrowse.ini, подпись, тип, шаг, пределы, знаков после запятой
 enum SetType { S_NUM, S_FONT, S_BOOL, S_OPEN };
@@ -1703,33 +1688,16 @@ struct SetItem { const char *key, *label; SetType type; double step, lo, hi; int
 static const SetItem SET_ITEMS[] = {
     { "list_pt",       "Кегль списка, пт",       S_NUM,  0.5, 4,   24,   1 },
     { "list_font",     "Гарнитура списка",       S_FONT, 0,   0,   0,    0 },
-    { "btn_pt",        "Кегль кнопок, пт",       S_NUM,  0.5, 3,  24,    1 },
-    { "btn_font",      "Гарнитура кнопок",       S_FONT, 0,   0,   0,    0 },
-    { "info_pt",       "Кегль сведений, пт",     S_NUM,  0.5, 3,   14,   1 },
-    { "gap_pt",        "Поля и промежутки, пт",  S_NUM,  1,   0,   24,   0 },
-    { "btn_pad_pt",    "Поле в кнопке, пт",      S_NUM,  1,   0,   24,   0 },
-    { "btn_height_pt", "Высота кнопки, пт",      S_NUM,  1,   12,  60,   0 },
-    { "icon_pt",       "Иконка, пт",             S_NUM,  0.5, 3,   24,   1 },
-    { "btn_radius_pt", "Скругление углов, пт",   S_NUM,  0.2, 0,   20,   1 },
-    { "btn_line_pt",   "Толщина рамки, пт",      S_NUM,  0.1, 0.1, 3,    1 },
     { "long_tap_ms",   "Долгое нажатие, мс",     S_NUM,  50,  150, 3000, 0 },
     { "idle_min",      "Автозакрытие, мин",      S_NUM,  0.5, 0.5, 60,   1 },
     { "allow_adds_edit", "Редактирование .adds", S_BOOL, 0, 0, 1, 0 },
     { "trash_enabled", "Корзина",                 S_BOOL, 0,   0,   1,    0 },
     { "logging_enabled", "Журнал отладки",         S_BOOL, 0,   0,   1,    0 },
     { "show_hidden",   "Скрытые файлы",          S_BOOL, 0,   0,   1,    0 },
-    { "scale_pct",     "Масштаб, %",             S_NUM,  5,   50,  200,  0 },
     { "open_books",    "Открытие книг",          S_OPEN, 0,   0,   0,    0 },
-    { "key_font_pt", "Кегль клавиш поиска, пт (0 — авто)", S_NUM, 0.5, 0, 24, 1 },
-    { "func_pt", "Кегль служебных клавиш поиска, пт (0 — авто)", S_NUM, 0.5, 0, 24, 1 },
-    { "search_list_pt", "Кегль результатов поиска, пт", S_NUM, 0.5, 4, 24, 1 },
-    { "search_list_font", "Гарнитура результатов поиска", S_FONT, 0, 0, 0, 0 },
 };
 static const int SET_COUNT = int(sizeof(SET_ITEMS) / sizeof(SET_ITEMS[0]));
-static bool isFontSizeSetting(const QString &key) {
-    return key == u8("list_pt") || key == u8("btn_pt") || key == u8("info_pt")
-        || key == u8("key_font_pt") || key == u8("func_pt") || key == u8("search_list_pt");
-}
+static bool isFontSizeSetting(const QString &key) { return key == u8("list_pt"); }
 // Записать значения в kobrowse.ini: строка «ключ=…» заменяется, комментарии сохраняются
 static bool saveConfig(const QStringList &keys, const QStringList &vals) {
     const QString ini = u8(KOBROWSE_INI);
@@ -1803,11 +1771,17 @@ public:
         m_bold = fList;       m_bold.setBold(true);
 
         auto *lay = new QVBoxLayout(this);
-        lay->setContentsMargins(GAP, GAP, GAP, GAP);
-        lay->setSpacing(GAP);
+        lay->setContentsMargins(GAP, qMax(4, qRound(8 * SCREEN_DPI / 300.0)), GAP, GAP);
+        lay->setSpacing(qMax(4, GAP / 2));
 
         m_deviceStatus = new DeviceStatusBar(this);
-        m_deviceStatus->setFont(fMsg);
+        QFont statusFont = sansFont();
+        const QStringList statusFamilies = QFontDatabase().families();
+        for (const QString &family : statusFamilies)
+            if (family.compare(u8("Avenir Next"), Qt::CaseInsensitive) == 0) { statusFont = QFont(family); break; }
+        statusFont.setPixelSize(qMax(12, qRound(28 * SCREEN_DPI / 300.0)));
+        m_deviceStatus->setFont(statusFont);
+        m_deviceStatus->setScale(SCREEN_DPI / 300.0);
         lay->addWidget(m_deviceStatus);
 
         m_toolbar = new QWidget(this);
@@ -1829,12 +1803,10 @@ public:
         connect(home, &QPushButton::clicked, [this]() {
             clearSelection(); m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME)); load();
         });
-        if (TRASH_ENABLED) {
-            ChromeButton *trash = new ChromeButton(I_TRASH, QString(), m_toolbar);
-            trash->setAccessibleName(u8("Открыть корзину")); trash->setFixedSize(chromeHeight, chromeHeight);
-            toolbar->addWidget(trash);
-            connect(trash, &QPushButton::clicked, [this]() { openTrash(); });
-        }
+        m_trashButton = new ChromeButton(I_TRASH, QString(), m_toolbar);
+        m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
+        m_trashButton->setVisible(TRASH_ENABLED); toolbar->addWidget(m_trashButton);
+        connect(m_trashButton, &QPushButton::clicked, [this]() { openTrash(); });
         toolbar->addWidget(find); toolbar->addWidget(settings);
         connect(back, &QPushButton::clicked, [this]() { close(); });
         connect(find, &QPushButton::clicked, [this]() { ksearch_open(); });
@@ -1916,7 +1888,7 @@ public:
         m_actions->setHeaderHidden(true);
         m_actions->setRootIsDecorated(false);
         m_actions->setIndentation(0);
-        m_actions->setFont(fList);
+        m_actions->setFont(fMsg);
         m_actions->setFocusPolicy(Qt::NoFocus);
         m_actions->setSelectionMode(QAbstractItemView::NoSelection);
         m_actions->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -2844,12 +2816,10 @@ private:
         v->addWidget(title);
         QHBoxLayout *tabs = new QHBoxLayout();
         m_generalTab = makeButton(tabs, fBtn, "Общие", qMax(40, BTN_HEIGHT / 2), 1);
-        m_viewTab = makeButton(tabs, fBtn, "Вид", qMax(40, BTN_HEIGHT / 2), 1);
         m_fontTab = makeButton(tabs, fBtn, "Шрифты", qMax(40, BTN_HEIGHT / 2), 1);
         v->addLayout(tabs);
         connect(m_generalTab, &QPushButton::clicked, [this]() { setSettingsTab(0); });
-        connect(m_viewTab, &QPushButton::clicked, [this]() { setSettingsTab(1); });
-        connect(m_fontTab, &QPushButton::clicked, [this]() { setSettingsTab(2); });
+        connect(m_fontTab, &QPushButton::clicked, [this]() { setSettingsTab(1); });
 
         m_settingsScroll = new QScrollArea(m_settings);
         m_settingsScroll->setWidgetResizable(true);
@@ -2870,9 +2840,7 @@ private:
             m_minusBtns << static_cast<QPushButton *>(nullptr);
             m_plusBtns << static_cast<QPushButton *>(nullptr);
         }
-        const char *headings[] = { "Файлы", "Корзина", "Поведение", "Открытие книг", "Отладка",
-            "Размеры интерфейса", "Дополнительно: кнопки", "Список файлов", "Кнопки",
-            "Сведения и сообщения", "Результаты поиска", "Дополнительно: клавиатура" };
+        const char *headings[] = { "Файлы", "Корзина", "Поведение", "Открытие книг", "Отладка", "Список файлов" };
         for (int g = 0; g < GroupCount; ++g) {
             const SettingGroup group = static_cast<SettingGroup>(g);
             QWidget *block = new QWidget(content);
@@ -3104,7 +3072,7 @@ private:
         const int g = int(group);
         if (!settingGroupAdvanced(group) || !m_advancedButtons[g] || !m_groupBodies[g]) return;
         m_groupBodies[g]->setVisible(m_groupExpanded[g]);
-        const QString title = group == GroupKeyboard ? u8("Дополнительно: клавиатура") : u8("Дополнительно: кнопки");
+        const QString title = u8("Дополнительно");
         setButtonFace(m_advancedButtons[g], I_NONE, (m_groupExpanded[g] ? u8("− ") : u8("+ ")) + title);
     }
 
@@ -3112,8 +3080,8 @@ private:
         m_currentSettingsTab = tab;
         for (int g = 0; g < GroupCount; ++g)
             m_groupBlocks[g]->setVisible(settingGroupTab(static_cast<SettingGroup>(g)) == tab);
-        m_generalTab->setEnabled(tab != 0); m_viewTab->setEnabled(tab != 1); m_fontTab->setEnabled(tab != 2);
-        m_generalTab->update(); m_viewTab->update(); m_fontTab->update();
+        m_generalTab->setEnabled(tab != 0); m_fontTab->setEnabled(tab != 1);
+        m_generalTab->update(); m_fontTab->update();
         m_settingsScroll->verticalScrollBar()->setValue(0);
     }
 
@@ -3238,7 +3206,7 @@ private:
         refreshSettings();
     }
 
-    // Сохранить в kobrowse.ini и переоткрыть менеджер с новыми настройками
+    // Apply the saved draft in place, keeping navigation and clipboard.
     void saveSettings() {
         QStringList keys;
         for (int i = 0; i < SET_COUNT; ++i) keys << u8(SET_ITEMS[i].key);
@@ -3246,9 +3214,19 @@ private:
         if (m_resetHomeDraft && !resetHomeFolder(u8(KOBROWSE_HOME))) {
             showMessage(u8("Настройки сохранены, но домашнюю папку сбросить не удалось")); return;
         }
-        klog(u8("settings saved"));
-        close();
-        if (g_reopen) g_reopen->start();
+        loadConfig();
+        m_showHidden = SHOW_HIDDEN;
+        m_idle.setInterval(IDLE_MS); m_idle.start();
+        m_holdTimer.setInterval(LONG_TAP_MS);
+        m_trashButton->setVisible(TRASH_ENABLED);
+        QFont listFont = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT);
+        listFont.setPixelSize(LIST_PX);
+        m_list->setFont(listFont); m_fileDelegate->setListFont(listFont);
+        clearSelection();
+        showSettings(false);
+        load();
+        klog(u8("settings saved and applied without closing"));
+        showMessage(u8("Настройки сохранены"));
     }
 
     void goUp() {
@@ -3310,7 +3288,8 @@ private:
     QPushButton *m_advancedButtons[GroupCount] = {};
     bool m_groupExpanded[GroupCount] = {};
     int m_currentSettingsTab = 0, m_resetTabPending = 0;
-    QPushButton *m_generalTab = nullptr, *m_viewTab = nullptr, *m_fontTab = nullptr;
+    QPushButton *m_generalTab = nullptr, *m_fontTab = nullptr;
+    ChromeButton *m_trashButton = nullptr;
     QPushButton *m_resetHomeButton = nullptr;
     QLabel *m_homeStatus = nullptr;
     bool m_resetHomeDraft = false;
@@ -3334,7 +3313,6 @@ static QTimer              *g_poll = nullptr;  // страховка: inotify н
 static QTimer *g_lifecycleClose = nullptr;
 static QPointer<QObject> g_plugManager;
 static void closeForLifecycle() {
-    if (g_reopen) g_reopen->stop();
     if (g_search) g_search->close();
     if (g_win) g_win->close();
 }
@@ -3597,10 +3575,6 @@ static int kobrowse_init() {
     g_diagTimer->setInterval(DIAG_DELAY_MS);
     QObject::connect(g_diagTimer, &QTimer::timeout, []() { kobrowse_font_diag(); });
     // Таймер переоткрытия окна после «Сохранить» в настройках (старое окно успевает удалиться)
-    g_reopen = new QTimer();
-    g_reopen->setSingleShot(true);
-    g_reopen->setInterval(300);
-    QObject::connect(g_reopen, &QTimer::timeout, []() { kobrowse_open(); });
     nh_log("watching %s", KOBROWSE_TRIGGER);
     return 0;
 }

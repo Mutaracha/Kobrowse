@@ -4,42 +4,27 @@
 #include <QStringList>
 #include <QtGlobal>
 
-// Stable grouping of existing ini keys; group order is also display order.
 enum SettingGroup {
-    GroupFiles, GroupTrash, GroupBehavior, GroupBooks, GroupLogging,
-    GroupAppearance, GroupAppearanceAdvanced,
-    GroupListFont, GroupButtonFont, GroupInfoFont, GroupSearchFont, GroupKeyboard,
+    GroupFiles, GroupTrash, GroupBehavior, GroupBooks, GroupLogging, GroupListFont,
     GroupCount, GroupUnknown = -1
 };
-
 inline SettingGroup settingGroup(const QString &key) {
     struct Mapping { const char *key; SettingGroup group; };
     static const Mapping map[] = {
         {"show_hidden", GroupFiles}, {"allow_adds_edit", GroupFiles}, {"trash_enabled", GroupTrash},
         {"long_tap_ms", GroupBehavior}, {"idle_min", GroupBehavior},
         {"open_books", GroupBooks}, {"logging_enabled", GroupLogging},
-        {"scale_pct", GroupAppearance}, {"btn_height_pt", GroupAppearance},
-        {"icon_pt", GroupAppearance}, {"gap_pt", GroupAppearance},
-        {"btn_pad_pt", GroupAppearanceAdvanced}, {"btn_radius_pt", GroupAppearanceAdvanced},
-        {"btn_line_pt", GroupAppearanceAdvanced},
-        {"list_pt", GroupListFont}, {"list_font", GroupListFont},
-        {"btn_pt", GroupButtonFont}, {"btn_font", GroupButtonFont},
-        {"info_pt", GroupInfoFont}, {"search_list_pt", GroupSearchFont},
-        {"search_list_font", GroupSearchFont},
-        {"key_font_pt", GroupKeyboard}, {"func_pt", GroupKeyboard}
+        {"list_pt", GroupListFont}, {"list_font", GroupListFont}
     };
     for (const Mapping &m : map) if (key == QLatin1String(m.key)) return m.group;
     return GroupUnknown;
 }
 inline int settingGroupTab(SettingGroup group) {
     if (group >= GroupFiles && group <= GroupLogging) return 0;
-    if (group >= GroupAppearance && group <= GroupAppearanceAdvanced) return 1;
-    if (group >= GroupListFont && group <= GroupKeyboard) return 2;
+    if (group == GroupListFont) return 1;
     return -1;
 }
-inline bool settingGroupAdvanced(SettingGroup group) {
-    return group == GroupAppearanceAdvanced || group == GroupKeyboard;
-}
+inline bool settingGroupAdvanced(SettingGroup) { return false; }
 inline QString settingNumberDisplay(const QString &value, double lo, double hi, bool autoZero) {
     bool ok = false;
     const double number = QString(value).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
@@ -47,7 +32,6 @@ inline QString settingNumberDisplay(const QString &value, double lo, double hi, 
     return shown + QLatin1Char('\n') + QString::number(lo, 'g', 6)
         + QChar(0x2013) + QString::number(hi, 'g', 6);
 }
-// -1 means all tabs. Invalid metadata must never be reset accidentally.
 inline void resetSettingsDraft(const QStringList &keys, const QStringList &defaults,
                                QStringList &values, int tab) {
     const int count = qMin(keys.size(), qMin(defaults.size(), values.size()));
