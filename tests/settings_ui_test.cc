@@ -374,46 +374,54 @@ public:
                 && qAbs(w.m_confirm->geometry().center().y() - w.rect().center().y()) < 3, "confirmation centered");
         no->click(); require(!ALLOW_ADDS, "declining leaves adds protected");
         w.stepSetting(adds, 1); yes->click(); require(ALLOW_ADDS, "confirmation persists adds");
-        QPushButton *choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(books));
-        require(choice, "current book choice is clickable"); choice->click();
-        require(w.m_pickerShade->isVisible(), "picker shades background");
-        require(w.m_pickerDone->mapTo(&w, QPoint()).x() < w.m_pickerCancel->mapTo(&w, QPoint()).x(), "cancel right of done");
-        require(w.m_fontPicker->isVisible() && w.m_fontPicker->currentItem()
-            && w.m_fontPicker->currentItem()->isSelected() && w.m_fontPicker->topLevelItemCount() == 3,
-            "current choice selected and no cancel item");
-        w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(2));
-        w.m_pickerCancel->click(); require(OPEN_BOOKS == "auto", "cancel preserves book choice");
-        choice->click(); w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(2));
-        w.m_pickerDone->click(); require(OPEN_BOOKS == "0", "book choice applies after confirmation");
-        require(!w.m_pickerShade->isVisible(), "picker shade hides after selection");
+        require(!w.findChild<QWidget *>("pickerDialog"), "settings have no choice popup");
+        require(w.m_bookModes.size() == 3 && w.m_bookModes[0]->isSelected(), "auto book mode selected");
+        for (int n = 0; n < 3; ++n) {
+            require(w.m_bookModes[n]->parentWidget() == w.m_settingRows[books], "book modes share setting row");
+            if (n) require(w.m_bookModes[n-1]->geometry().right() + 1 == w.m_bookModes[n]->geometry().left(),
+                           "book modes form adjacent segments");
+        }
+        const char *modes[] = {"auto", "1", "0"};
+        for (int n = 1; n < 3; ++n) {
+            w.m_bookModes[n]->click();
+            require(OPEN_BOOKS == modes[n] && w.m_bookModes[n]->isSelected(), "book mode applies immediately");
+            require(!w.m_pickerShade->isVisible() && !w.m_confirm->isVisible(), "book choice opens no popup");
+        }
         w.setSettingsTab(1); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "font tab fits screen");
-        choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(family));
-        require(choice, "current font choice is clickable");
-        const QString originalFont = w.m_setVals[family];
-        w.m_setVals[family] = QString::fromUtf8("IBM Plex Sans"); w.refreshSettings(); QApplication::processEvents();
-        require(w.m_setLabels[family]->text() == QString::fromUtf8("IBM Plex Sans")
-                && w.m_setLabels[family]->width() >= QFontMetrics(w.m_setLabels[family]->font()).width(w.m_setLabels[family]->text()),
-                "font choice displays the complete name");
-        w.m_setVals[family] = originalFont; w.refreshSettings();
+        require(w.m_fontChoices.size() == w.m_fonts.size() && !w.m_fontChoices.isEmpty(), "inline font list contains all choices");
+        require(w.m_fontChoices[0]->text() == "Kobo", "empty font labelled Kobo");
+        require(w.m_fontChoices[0]->mapTo(&w, QPoint()).y() > w.m_settingRows[font]->mapTo(&w, QPoint()).y(),
+                "font choices follow size control");
+        require(!SettingChoiceButton::sampleText().isEmpty() && SettingChoiceButton::sampleText().contains(QString::fromUtf8("Пример")),
+                "font choices have Russian sample");
+        for (int n = 1; n < w.m_fontChoices.size(); ++n)
+            require(w.m_fontChoices[n]->previewFont().family() == w.m_fonts[n], "each sample uses its own font");
         ButtonFace *fontResetFace = reset->findChild<ButtonFace *>();
         require(fontResetFace && fontResetFace->width() >= QFontMetrics(fontResetFace->font()).width(fontResetFace->text()) + 2 * BTN_MARGIN,
                 "font reset label fits");
-        choice->click();
-        require(w.m_fontPicker->currentItem() && w.m_fontPicker->currentItem()->isSelected(), "current font selected");
-        require(w.m_fontPicker->topLevelItemCount() == w.m_fonts.size(), "font picker has no cancel item");
-        require(w.m_pickerDone->mapTo(&w, QPoint()).x() < w.m_pickerCancel->mapTo(&w, QPoint()).x(),
-                "picker cancel is on the right");
-        require(w.m_fontPicker->topLevelItem(0)->text(0) == "Kobo", "empty font labelled Kobo");
+        // A drag over an inline choice scrolls the settings, not a selection.
+        SettingChoiceButton *first = w.m_fontChoices[0];
+        w.m_settingsScroll->ensureWidgetVisible(first); QApplication::processEvents();
+        const QPoint firstPoint = first->mapTo(&w, first->rect().center());
+        const QString oldFamily = w.m_setVals[family];
+        touch(w, QEvent::TouchBegin, firstPoint);
+        touch(w, QEvent::TouchUpdate, firstPoint - QPoint(0, SWIPE_PX + 20));
+        touch(w, QEvent::TouchEnd, firstPoint - QPoint(0, SWIPE_PX + 20));
+        require(w.m_setVals[family] == oldFamily && w.m_settingsScroll->verticalScrollBar()->value() > 0,
+                "drag scrolls font list without changing font");
         if (w.m_fonts.size() > 1) {
-            require(w.m_fontPicker->topLevelItem(1)->font(0).family() == w.m_fonts.at(1), "font choices use own typeface");
-            w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(1)); w.m_pickerDone->click();
+            SettingChoiceButton *second = w.m_fontChoices[1];
+            w.m_settingsScroll->ensureWidgetVisible(second); QApplication::processEvents();
+            const QPoint point = second->mapTo(&w, second->rect().center());
+            touch(w, QEvent::TouchBegin, point); touch(w, QEvent::TouchEnd, point);
+            require(w.m_setVals[family] == w.m_fonts[1] && second->isSelected(), "touch selects font immediately");
             require(w.m_actions->font().family() == w.m_list->font().family()
                     && w.m_actions->font().pixelSize() == w.m_list->font().pixelSize(), "font selection applies to menu");
-            choice->click();
+            require(!w.m_pickerShade->isVisible() && !w.m_confirm->isVisible(), "font choice opens no popup");
         }
         require(w.m_setLabels[font]->text().contains(QString::fromUtf8(" пт")), "font size includes points");
-        w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(0)); w.m_pickerDone->click();
+        first->click(); require(w.m_setVals[family].isEmpty() && first->isSelected(), "Kobo font applies immediately");
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
         require(w.m_actions->font().pixelSize() == LIST_PX && w.m_actions->font().family() == w.m_list->font().family(),
@@ -426,7 +434,8 @@ public:
         w.m_clip = QStringList() << (w.m_root + "/.adds/archive-source");
         close->click(); QApplication::processEvents();
         require(w.isVisible() && !w.m_settings->isVisible() && w.m_path == path && w.m_clip.size() == 1, "close retains folder and clipboard");
-        w.showSettings(true); require(w.m_setVals[adds] == "1" && w.m_setVals[hidden] == "0", "saved values persist");
+        w.showSettings(true); require(w.m_setVals[adds] == "1" && w.m_setVals[hidden] == "0" && w.m_setVals[books] == "0"
+                && w.m_bookModes[2]->isSelected(), "saved values and selected book mode persist");
         const char *savedIni = KOBROWSE_INI; const QByteArray badIni = (w.m_root + "/.adds/no-such/config").toUtf8();
         KOBROWSE_INI = badIni.constData(); w.stepSetting(hidden, 1);
         require(!SHOW_HIDDEN && w.m_setVals[hidden] == "0" && !w.m_settingsNotice->text().isEmpty(), "write error rolls back");

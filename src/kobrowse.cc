@@ -1876,18 +1876,48 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
     return true;
 }
 
-// Single separators between choices; the enclosing dialog and buttons supply
-// their own borders, so the last row must not draw a second horizontal rule.
-class PickerDelegate : public QStyledItemDelegate {
+// Inline choices share the same black/white selection feedback as Kobo controls.
+class SettingChoiceButton : public QPushButton {
 public:
-    explicit PickerDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
-    void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
-        QStyledItemDelegate::paint(p, option, index);
-        if (index.row() + 1 < index.model()->rowCount(index.parent())) {
-            p->save(); p->setPen(QPen(QColor(140, 140, 140), 1));
-            p->drawLine(option.rect.bottomLeft(), option.rect.bottomRight()); p->restore();
-        }
+    SettingChoiceButton(const QString &label, const QFont &face, bool preview, QWidget *parent)
+        : QPushButton(label, parent), m_face(face), m_preview(preview) {
+        setFocusPolicy(Qt::NoFocus);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        const int lines = preview ? 2 : 1;
+        setMinimumHeight(qMax(48, QFontMetrics(face).lineSpacing() * lines + 20));
+        setAccessibleName(label);
     }
+    void setSelected(bool selected) { m_selected = selected; update(); }
+    bool isSelected() const { return m_selected; }
+    QFont previewFont() const { return m_face; }
+    static QString sampleText() { return u8("Пример русского текста: Съешь ещё этих мягких булок."); }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this);
+        const bool selected = m_selected || isDown();
+        p.fillRect(rect(), selected ? Qt::black : Qt::white);
+        p.setPen(selected ? Qt::white : Qt::black);
+        p.setFont(m_face);
+        const QFontMetrics fm(m_face);
+        if (m_preview) {
+            const int left = qMax(8, BTN_MARGIN);
+            const int available = qMax(1, width() - 2 * left);
+            const int lineHeight = fm.lineSpacing();
+            const int top = (height() - 2 * lineHeight) / 2;
+            p.drawText(QRect(left, top, available, lineHeight), Qt::AlignLeft | Qt::AlignVCenter,
+                       fm.elidedText(text(), Qt::ElideRight, available));
+            p.drawText(QRect(left, top + lineHeight, available, lineHeight), Qt::AlignLeft | Qt::AlignVCenter,
+                       fm.elidedText(sampleText(), Qt::ElideRight, available));
+        } else {
+            p.drawText(rect().adjusted(4, 0, -4, 0), Qt::AlignCenter,
+                       fm.elidedText(text(), Qt::ElideRight, qMax(1, width() - 8)));
+        }
+        p.setPen(QPen(Qt::black, qMax(1.0, BTN_PEN)));
+        p.drawRect(QRectF(rect()).adjusted(BTN_PEN/2, BTN_PEN/2, -BTN_PEN/2, -BTN_PEN/2));
+    }
+private:
+    QFont m_face;
+    bool m_preview, m_selected = false;
 };
 
 // ---------- окно менеджера ----------
@@ -2078,37 +2108,6 @@ public:
         m_pickerShade->setObjectName(u8("pickerShade"));
         m_pickerShade->setStyleSheet(u8("QWidget#pickerShade{background-color:rgba(0,0,0,40);}"));
         m_pickerShade->hide();
-        m_pickerDialog = new QWidget(this); m_pickerDialog->setObjectName(u8("pickerDialog"));
-        m_pickerDialog->setStyleSheet(u8("QWidget#pickerDialog{border:2px solid black;background:white;}"));
-        QVBoxLayout *pickerLayout = new QVBoxLayout(m_pickerDialog);
-        pickerLayout->setContentsMargins(2, 2, 2, 2); pickerLayout->setSpacing(0);
-        m_pickerTitle = new QLabel(m_pickerDialog); m_pickerTitle->setFont(settingsText);
-        m_pickerTitle->setAlignment(Qt::AlignCenter); m_pickerTitle->setMinimumHeight(qMax(48, BTN_HEIGHT));
-        pickerLayout->addWidget(m_pickerTitle);
-        m_fontPicker = new QTreeWidget(m_pickerDialog);
-        pickerLayout->addWidget(m_fontPicker, 1);
-        QHBoxLayout *pickerButtons = new QHBoxLayout(); pickerButtons->setSpacing(0);
-        m_pickerDone = makeButton(pickerButtons, settingsButton, "Готово", qRound(BTN_HEIGHT * 1.3), 1);
-        m_pickerCancel = makeButton(pickerButtons, settingsButton, "Отмена", qRound(BTN_HEIGHT * 1.3), 1);
-        m_pickerCancel->setObjectName(u8("pickerCancel")); m_pickerDone->setObjectName(u8("pickerDone"));
-        pickerLayout->addLayout(pickerButtons);
-        connect(m_pickerCancel, &QPushButton::clicked, [this]() { m_pickerDialog->hide(); m_pickerShade->hide(); });
-        connect(m_pickerDone, &QPushButton::clicked, [this]() { chooseFont(m_fontPicker->currentItem()); });
-        m_pickerDialog->hide();
-        m_fontPicker->setColumnCount(1); m_fontPicker->setHeaderHidden(true);
-        m_fontPicker->setRootIsDecorated(false); m_fontPicker->setIndentation(0);
-        m_fontPicker->setFont(settingsText);
-        m_fontPicker->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_fontPicker->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        m_fontPicker->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-        m_fontPicker->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:0;}"
-                                      "QTreeWidget::item{padding-left:12px;}"
-                                      "QTreeWidget::item:selected,QTreeWidget::item:selected:!active{background:black;color:white;}"));
-        m_fontPicker->setItemDelegate(new PickerDelegate(m_fontPicker));
-        m_fontPicker->setSelectionMode(QAbstractItemView::SingleSelection);
-        connect(m_fontPicker, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
-            if (item) m_fontPicker->setCurrentItem(item);
-        });
         connect(m_actions, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int) {
             if (it && (it->flags() & Qt::ItemIsEnabled)) runMenuAction(it->data(0, Qt::UserRole).toInt());
         });
@@ -2279,7 +2278,7 @@ protected:
                 m_brightnessGesture.begin(p, size(), pts.size() == 1
                     && p.y() >= listRect.top() && p.y() <= listRect.bottom()
                     && !m_settings->isVisible() && !m_actions->isVisible()
-                    && !m_confirm->isVisible() && !m_fontPicker->isVisible());
+                    && !m_confirm->isVisible());
             }
             m_press.start();
             m_pressPos = p;
@@ -2293,10 +2292,7 @@ protected:
             m_menuTouch = m_actions->isVisible()
                 && m_actions->viewport()->rect().contains(m_actions->viewport()->mapFrom(this, p));
             m_menuScrollStart = m_actions->verticalScrollBar()->value();
-            m_fontPickerTouch = m_fontPicker->isVisible()
-                && m_fontPicker->viewport()->rect().contains(m_fontPicker->viewport()->mapFrom(this, p));
-            if (m_fontPickerTouch) m_fontPickerScrollStart = m_fontPicker->verticalScrollBar()->value();
-            m_settingsTouch = !m_fontPicker->isVisible() && m_settings->isVisible() && m_settingsScroll
+            m_settingsTouch = !m_confirm->isVisible() && m_settings->isVisible() && m_settingsScroll
                 && m_settingsScroll->viewport()->rect().contains(m_settingsScroll->viewport()->mapFrom(this, p));
             m_activeSlider = nullptr;
             if (m_settingsTouch && !m_confirm->isVisible() && pts.size() == 1) {
@@ -2308,7 +2304,7 @@ protected:
                 }
             }
             if (m_settingsTouch) m_settingsScrollStart = m_settingsScroll->verticalScrollBar()->value();
-            if (pts.size() == 1 && !m_activeSlider && !m_fontPicker->isVisible() && !m_actions->isVisible()) {
+            if (pts.size() == 1 && !m_activeSlider && !m_actions->isVisible()) {
                 for (QWidget *hit = childAt(p); hit && hit != this; hit = hit->parentWidget()) {
                     QPushButton *button = qobject_cast<QPushButton *>(hit);
                     if (button) {
@@ -2362,11 +2358,6 @@ protected:
             if (m_activeSlider) {
                 if (pts.size() != 1) { m_activeSlider->cancel(); m_activeSlider = nullptr; m_moved = true; }
                 else m_activeSlider->move(m_activeSlider->mapFrom(this, p).x());
-                break;
-            }
-            if (m_fontPickerTouch && !pts.isEmpty()) {
-                if ((p - m_pressPos).manhattanLength() > SWIPE_PX || pts.size() >= 2) m_moved = true;
-                if (m_moved) m_fontPicker->verticalScrollBar()->setValue(m_fontPickerScrollStart - (p.y() - m_pressPos.y()));
                 break;
             }
             if (m_settingsTouch && !pts.isEmpty()) {
@@ -2453,7 +2444,6 @@ protected:
         if (m_list) m_list->doItemsLayout();
         if (m_workOverlay) m_workOverlay->setGeometry(rect());
         placeActionMenu();
-        if (m_fontPicker && m_fontPicker->isVisible()) { m_pickerShade->setGeometry(rect()); placePicker(); }
         if (m_confirm && m_confirm->isVisible()) { m_pickerShade->setGeometry(rect()); placeConfirmation(); }
         m_pageTimer.start(0);
     }
@@ -2533,21 +2523,6 @@ private:
 
     // Касание в точке p (координаты окна)
     void tapAt(const QPoint &p, bool longTap) {
-        if (m_fontPicker->isVisible()) {
-            const QPoint pos = m_fontPicker->viewport()->mapFrom(this, p);
-            if (m_fontPicker->viewport()->rect().contains(pos)) {
-                QTreeWidgetItem *item = m_fontPicker->itemAt(pos);
-                if (item) m_fontPicker->setCurrentItem(item);
-            } else {
-                QWidget *target = childAt(p);
-                bool handled = false;
-                for (QWidget *cur = target; cur && cur != m_pickerDialog; cur = cur->parentWidget()) {
-                    if (cur == m_pickerDone || cur == m_pickerCancel) { static_cast<QPushButton *>(cur)->click(); handled = true; break; }
-                }
-                if (!handled && !m_pickerDialog->geometry().contains(p)) { m_pickerDialog->hide(); m_pickerShade->hide(); }
-            }
-            return;
-        }
         if (m_actions->isVisible()) {
             const QPoint menuPoint = m_actions->viewport()->mapFrom(this, p);
             if (m_actions->viewport()->rect().contains(menuPoint)) {
@@ -3258,6 +3233,7 @@ private:
         const int controlInset = qMax(8, qRound(16 * sc));
         rows->setContentsMargins(controlInset, 0, controlInset, 0); rows->setSpacing(qMax(16, GAP * 2));
         const int rowH = qMax(48, qRound(80 * sc));
+        m_fonts << QString() << QFontDatabase().families();
         for (int i = 0; i < SET_COUNT; ++i) {
             m_setLabels << static_cast<QLabel *>(nullptr);
             m_switches << static_cast<SettingSwitch *>(nullptr);
@@ -3343,30 +3319,43 @@ private:
                     controls->addWidget(slider, 1);
                     m_plusBtns[i] = makeStepButton(controls, fBtn, "+", rowH, bw, i, +1);
                     val = name;
-                } else if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
-                    QPushButton *pick = new QPushButton(line);
-                    pick->setObjectName(u8("settingChoice_%1").arg(i));
-                    pick->setFocusPolicy(Qt::NoFocus); pick->setMinimumHeight(rowH);
-                    pick->setFixedWidth(qMax(160, qRound(360 * sc)));
-                    pick->setProperty("choiceRowHeight", rowH);
-                    pick->setStyleSheet(u8("QPushButton{border:0;background:white;color:black;}"
-                                           "QPushButton:pressed{background:white;color:black;}"));
-                    pick->setProperty("settingsChoice", true);
-                    QHBoxLayout *choiceLayout = new QHBoxLayout(pick); choiceLayout->setContentsMargins(4, 0, 4, 0);
-                    val = new QLabel(pick); val->setFont(fText); val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-                    val->setWordWrap(true); val->setMinimumWidth(0);
-                    val->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-                    val->setAttribute(Qt::WA_TransparentForMouseEvents);
-                    choiceLayout->addWidget(val, 1);
-                    QLabel *arrow = new QLabel(u8("›"), pick); arrow->setFont(fText);
-                    arrow->setAttribute(Qt::WA_TransparentForMouseEvents); choiceLayout->addWidget(arrow);
-                    r->addWidget(pick);
-                    connect(pick, &QPushButton::clicked, [this, i]() {
-                        if (SET_ITEMS[i].type == S_FONT) openFontPicker(i); else openBookPicker(i);
-                    });
+                } else if (SET_ITEMS[i].type == S_OPEN) {
+                    QHBoxLayout *segments = new QHBoxLayout();
+                    segments->setContentsMargins(0, 0, 0, 0); segments->setSpacing(0);
+                    const char *labels[] = { "Авто", "Всегда", "Никогда" };
+                    const char *values[] = { "auto", "1", "0" };
+                    for (int n = 0; n < 3; ++n) {
+                        SettingChoiceButton *button = new SettingChoiceButton(u8(labels[n]), fBtn, false, line);
+                        button->setObjectName(u8("bookMode_%1").arg(n));
+                        button->setMinimumHeight(rowH);
+                        m_bookModes << button;
+                        segments->addWidget(button, 1);
+                        const QString value = u8(values[n]);
+                        connect(button, &QPushButton::clicked, [this, i, value]() {
+                            if (m_setVals[i] == value) return;
+                            m_setVals[i] = value; refreshSettings(); saveSettings();
+                        });
+                    }
+                    r->addLayout(segments, 2);
                 }
                 m_setLabels[i] = val; m_switches[i] = toggle;
                 items->addWidget(line);
+                if (SET_ITEMS[i].type == S_FONT) {
+                    for (int n = 0; n < m_fonts.size(); ++n) {
+                        const QString family = m_fonts[n];
+                        QFont preview = family.isEmpty() ? font() : QFont(family);
+                        preview.setPixelSize(fText.pixelSize());
+                        SettingChoiceButton *button = new SettingChoiceButton(
+                            family.isEmpty() ? u8("Kobo") : family, preview, true, body);
+                        button->setObjectName(u8("fontChoice_%1").arg(n));
+                        m_fontChoices << button;
+                        items->addWidget(button);
+                        connect(button, &QPushButton::clicked, [this, i, family]() {
+                            if (m_setVals[i].compare(family, Qt::CaseInsensitive) == 0) return;
+                            m_setVals[i] = family; refreshSettings(); saveSettings();
+                        });
+                    }
+                }
                 QFrame *separator = new QFrame(body); separator->setFrameShape(QFrame::HLine);
                 separator->setFrameShape(QFrame::NoFrame);
                 separator->setFixedHeight(qMax(1, qRound(1.5 * sc)));
@@ -3423,83 +3412,6 @@ private:
         v->addLayout(resets);
         setSettingsTab(0);
         m_settings->hide();
-        m_fonts << QString() << QFontDatabase().families();
-    }
-
-    void placePicker() {
-        const int margin = qMax(8, GAP);
-        const int availableW = qMax(1, width() - 2 * margin);
-        const int availableH = qMax(1, height() - 2 * margin);
-        int textWidth = 0;
-        for (int i = 0; i < m_fontPicker->topLevelItemCount(); ++i) {
-            const QTreeWidgetItem *item = m_fontPicker->topLevelItem(i);
-            textWidth = qMax(textWidth, QFontMetrics(item->font(0)).width(item->text(0)));
-        }
-        const int w = qMin(availableW, qMax(width() * 4 / 5, textWidth + 4 * margin));
-        const int desired = (m_fontPicker->topLevelItemCount() + 2) * qMax(48, BTN_HEIGHT) + 8;
-        const int h = qMin(availableH, qMin(qMax(1, height() * 2 / 3), desired));
-        m_pickerDialog->setGeometry((width() - w) / 2, (height() - h) / 2, w, h);
-    }
-
-    void openFontPicker(int row) {
-        if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_FONT) return;
-        m_fontPickerRow = row;
-        m_pickerIsBooks = false;
-        m_pickerTitle->setText(u8("Шрифт списка файлов"));
-        m_fontPicker->clear();
-        QTreeWidgetItem *current = nullptr;
-        for (int n = 0; n < m_fonts.size(); ++n) {
-            QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
-            item->setText(0, m_fonts[n].isEmpty() ? u8("Kobo") : m_fonts[n]);
-            item->setData(0, Qt::UserRole, n);
-            if (!m_fonts[n].isEmpty()) {
-                QFont preview = m_fontPicker->font(); preview.setFamily(m_fonts[n]); item->setFont(0, preview);
-            }
-            item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
-            if (m_fonts[n].compare(m_setVals[row], Qt::CaseInsensitive) == 0) current = item;
-        }
-        placePicker();
-        m_pickerShade->setGeometry(rect()); m_pickerShade->show(); m_pickerShade->raise();
-        m_pickerDialog->show(); m_pickerDialog->raise();
-        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
-    }
-
-    void openBookPicker(int row) {
-        if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_OPEN) return;
-        m_fontPickerRow = row; m_pickerIsBooks = true;
-        m_pickerTitle->setText(u8("Открытие книг"));
-        m_fontPicker->clear();
-        const char *labels[] = { "Авто — только 4.38", "Всегда — на свой риск", "Никогда" };
-        QTreeWidgetItem *current = nullptr;
-        const QString value = m_setVals[row].toLower();
-        const int selected = value == u8("1") ? 1 : value == u8("0") ? 2 : 0;
-        for (int n = 0; n < 3; ++n) {
-            QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
-            item->setText(0, u8(labels[n])); item->setData(0, Qt::UserRole, n);
-            item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
-            if (n == selected) current = item;
-        }
-        placePicker();
-        m_pickerShade->setGeometry(rect()); m_pickerShade->show(); m_pickerShade->raise();
-        m_pickerDialog->show(); m_pickerDialog->raise();
-        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
-    }
-
-    void chooseFont(QTreeWidgetItem *item) {
-        if (!item) return;
-        const int n = item->data(0, Qt::UserRole).toInt();
-        if (m_fontPickerRow >= 0 && m_fontPickerRow < m_setVals.size()) {
-            if (m_pickerIsBooks && n >= 0 && n < 3) {
-                const char *values[] = { "auto", "1", "0" };
-                m_setVals[m_fontPickerRow] = u8(values[n]);
-                refreshSettings();
-            } else if (!m_pickerIsBooks && n >= 0 && n < m_fonts.size()) {
-                m_setVals[m_fontPickerRow] = m_fonts[n];
-                refreshSettings();
-            }
-        }
-        m_pickerDialog->hide(); m_pickerShade->hide();
-        if (n >= 0) saveSettings();
     }
 
     void updateHomeDraft() {
@@ -3643,15 +3555,15 @@ private:
                     const QString suffix = QString::fromLatin1(SET_ITEMS[i].key) == u8("list_pt") ? u8(" пт") : u8(" мс");
                     m_setLabels[i]->setText(u8(SET_ITEMS[i].label) + u8(": ") + v + suffix);
                 } else m_setLabels[i]->setText(shown);
-                if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
-                    QPushButton *button = qobject_cast<QPushButton *>(m_setLabels[i]->parentWidget());
-                    if (button) {
-                        const int textWidth = qMax(1, button->minimumWidth() - 12);
-                        const int textHeight = QFontMetrics(m_setLabels[i]->font()).boundingRect(
-                            0, 0, textWidth, 10000, Qt::TextWordWrap | Qt::TextWrapAnywhere, shown).height();
-                        button->setMinimumHeight(qMax(button->property("choiceRowHeight").toInt(), textHeight + 12));
-                    }
-                }
+
+            }
+            if (SET_ITEMS[i].type == S_FONT) {
+                for (int n = 0; n < m_fontChoices.size(); ++n)
+                    m_fontChoices[n]->setSelected(m_fonts[n].compare(v, Qt::CaseInsensitive) == 0);
+            } else if (SET_ITEMS[i].type == S_OPEN) {
+                const QString mode = v.toLower();
+                const int selected = mode == u8("1") ? 1 : mode == u8("0") ? 2 : 0;
+                for (int n = 0; n < m_bookModes.size(); ++n) m_bookModes[n]->setSelected(n == selected);
             }
             if (m_switches[i]) m_switches[i]->setChecked(v.toDouble() != 0);
         }
@@ -3741,12 +3653,9 @@ private:
     std::function<void()> m_work;
     QString       m_holdPath, m_operationDetail;
     QStringList   m_deleteSnapshot;
-    bool          m_menuTouch = false, m_fontPickerTouch = false, m_pickerIsBooks = false;
-    int           m_menuScrollStart = 0, m_fontPickerScrollStart = 0, m_fontPickerRow = -1;
-    QTreeWidget *m_fontPicker = nullptr;
-    QWidget *m_pickerShade = nullptr, *m_pickerDialog = nullptr;
-    QLabel *m_pickerTitle = nullptr;
-    QPushButton *m_pickerDone = nullptr, *m_pickerCancel = nullptr;
+    bool          m_menuTouch = false;
+    int           m_menuScrollStart = 0;
+    QWidget *m_pickerShade = nullptr; // shared shade for confirmation dialogs
     bool          m_holdFired = false, m_holdBlank = false, m_menuRequested = false, m_swipeList = false;
     int           m_pendingDelete = 0, m_confirmSetting = -1;
     QPoint        m_pressPos;
@@ -3773,6 +3682,7 @@ private:
     QList<QPushButton *> m_stepBtns;    // кнопки «−»/«+» по строкам: 0,1 — строка 0; 2,3 — строка 1 …
     QStringList   m_setVals, m_initialSetVals; // черновик и значения при открытии
     QStringList   m_fonts;              // гарнитуры для выбора
+    QVector<SettingChoiceButton *> m_fontChoices, m_bookModes;
     QTreeWidget  *m_actions = nullptr;
     QWidget      *m_confirm = nullptr;
     QLabel       *m_confirmText = nullptr;
