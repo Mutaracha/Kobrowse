@@ -269,6 +269,16 @@ public:
         require(!QFileInfo(trashFixture).exists(), "confirmed empty trash removes fixture");
         w.m_trashButton->click(); QApplication::processEvents();
         require(w.m_path == w.m_root && !w.m_emptyTrashButton->isVisible(), "trash icon closes trash and returns to folder");
+        require(saveConfig(QStringList() << "list_pt" << "long_tap_ms", QStringList() << "20" << "1200"), "legacy settings fixture");
+        loadConfig(); require(LIST_PX == ptToPx(14) && LONG_TAP_MS == 700, "legacy settings bounded at runtime");
+        w.showSettings(true); QApplication::processEvents();
+        w.stepSetting(row("show_hidden"), 1);
+        QSettings preserved(QString::fromUtf8(KOBROWSE_INI), QSettings::IniFormat);
+        require(preserved.value("kobrowse/list_pt").toString() == "20"
+                && preserved.value("kobrowse/long_tap_ms").toString() == "1200", "unrelated edit preserves legacy values");
+        w.stepSetting(row("show_hidden"), 1); w.showSettings(false);
+        require(saveConfig(QStringList() << "list_pt" << "long_tap_ms", QStringList() << "8.5" << "450"), "restore default fixture");
+        loadConfig();
         w.showSettings(true); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings fit screen");
         const int font = row("list_pt"), family = row("list_font"), hold = row("long_tap_ms");
@@ -279,6 +289,12 @@ public:
         QPushButton *close = w.findChild<QPushButton *>("closeSettings");
         require(yes && no && reset && close, "settings controls exist");
         require(!w.findChild<QPushButton *>("resetAll"), "no global reset");
+        require(SET_ITEMS[hold].lo == 350 && SET_ITEMS[hold].hi == 700 && SET_ITEMS[hold].step == 50
+                && cfgDefault("long_tap_ms") == "450", "hold limits and default");
+        require(SET_ITEMS[font].lo == 7 && SET_ITEMS[font].hi == 14 && SET_ITEMS[font].step == .5
+                && cfgDefault("list_pt") == "8.5", "font limits and default");
+        require(!w.m_settingsNotice->isVisible(), "empty notice does not cover settings");
+        require(w.m_settingLines[row("trash_enabled")]->isHidden(), "no line before empty trash");
         require(w.m_homeStatus->parentWidget() == w.m_resetHomeButton->parentWidget(), "home path and reset share a row");
         require(w.m_resetHomeButton->width() >= QFontMetrics(w.m_resetHomeButton->findChild<ButtonFace *>()->font()).width(QString::fromUtf8("Сбросить домашнюю папку")),
                 "home reset text is not clipped");
@@ -295,9 +311,10 @@ public:
                         << w.m_groupBlocks[g]->minimumSizeHint().width() << '\n';
             }
             require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings never overflow horizontally");
-            const QLabel *rangeLow = w.findChild<QLabel *>(QString("rangeLow_%1").arg(hold));
-            const QLabel *rangeHigh = w.findChild<QLabel *>(QString("rangeHigh_%1").arg(hold));
-            require(rangeLow && rangeHigh && rangeLow->text() == "150" && rangeHigh->text() == "3000", "slider endpoints labelled");
+            require(!w.findChild<QLabel *>(QString("rangeLow_%1").arg(hold))
+                    && !w.findChild<QLabel *>(QString("rangeHigh_%1").arg(hold)), "no endpoint labels");
+            require(w.m_setLabels[hold]->mapTo(&w, QPoint()).x() < w.m_sliders[hold]->mapTo(&w, QPoint()).x(),
+                    "slider title is left of controls");
             require(w.m_setLabels[hold]->text().contains(QString::number(LONG_TAP_MS) + QString::fromUtf8(" мс")), "slider value appears next to title");
             const ButtonFace *face = reset->findChild<ButtonFace *>();
             require(face && face->width() >= QFontMetrics(face->font()).width(face->text()) + 2 * BTN_MARGIN,
@@ -318,7 +335,10 @@ public:
         require(w.m_fontPicker->isVisible() && w.m_fontPicker->currentItem()
             && w.m_fontPicker->currentItem()->isSelected() && w.m_fontPicker->topLevelItemCount() == 3,
             "current choice selected and no cancel item");
-        w.chooseFont(w.m_fontPicker->topLevelItem(2)); require(OPEN_BOOKS == "0", "book choice applies immediately");
+        w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(2));
+        w.m_pickerCancel->click(); require(OPEN_BOOKS == "auto", "cancel preserves book choice");
+        choice->click(); w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(2));
+        w.m_pickerDone->click(); require(OPEN_BOOKS == "0", "book choice applies after confirmation");
         require(!w.m_pickerShade->isVisible(), "picker shade hides after selection");
         w.setSettingsTab(1); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "font tab fits screen");
@@ -339,11 +359,11 @@ public:
         if (w.m_fonts.size() > 1)
             require(w.m_fontPicker->topLevelItem(1)->font(0).family() == w.m_fonts.at(1), "font choice uses its own family");
         require(w.m_setLabels[font]->text().contains(QString::fromUtf8(" пт")), "font size includes points");
-        w.chooseFont(w.m_fontPicker->topLevelItem(0));
+        w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(0)); w.m_pickerDone->click();
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
         reset->click(); no->click(); require(LIST_PX > beforeFont, "reset cancellation preserves setting");
-        reset->click(); yes->click(); require(LIST_PX == ptToPx(8), "font reset applies immediately");
+        reset->click(); yes->click(); require(LIST_PX == ptToPx(8.5), "font reset applies immediately");
         require(QFileInfo(homeFile).exists(), "font reset preserves home");
         w.setSettingsTab(0); w.stepSetting(hidden, 1); require(!SHOW_HIDDEN, "hidden toggle applied");
         const QString path = w.m_root + "/.adds"; w.m_path = path;

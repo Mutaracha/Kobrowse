@@ -117,9 +117,9 @@ static QString OPEN_BOOKS;   // auto / 1 / 0 — см. open_books в kobrowse.in
 // Ключи kobrowse.ini: имя, значение по умолчанию, пояснение
 struct CfgKey { const char *key, *def, *comment; };
 static const CfgKey CFG_KEYS[] = {
-    { "list_pt",       "8",           "кегль списка файлов, пт: 8 = петит, 9 = боргес, 10 = корпус (можно дробное: 8.5)" },
+    { "list_pt",       "8.5",           "кегль списка файлов, пт: 8 = петит, 9 = боргес, 10 = корпус (можно дробное: 8.5)" },
     { "list_font",     "",            "гарнитура списка; пусто — как в Nickel. Примеры: Georgia, Amasis, Kobo Nickel" },
-    { "long_tap_ms",   "500",         "долгое нажатие (выбор строки), мс" },
+    { "long_tap_ms",   "450",         "долгое нажатие (выбор строки), мс" },
     { "allow_adds_edit", "0",       "разрешить изменение содержимого .adds: 1 — да, 0 — только просмотр" },
     { "trash_enabled", "1",           "использовать корзину: 1 — да, 0 — удалять после подтверждения" },
     { "logging_enabled", "1",          "журнал отладки Kobrowse: 1 — вести, 0 — выключить" },
@@ -254,13 +254,13 @@ static void loadConfig() {
         return (ok && v >= lo && v <= hi) ? v : def;
     };
     OPEN_BOOKS  = canUpdate ? st.value(u8("kobrowse/open_books")).toString().trimmed().toLower() : QString();
-    LIST_PX     = ptToPx(num("list_pt", 8, 4, 24));
+    LIST_PX     = ptToPx(qBound(7.0, num("list_pt", 8.5, 4, 24), 14.0));
     // Fixed Kobo-proportional chrome; legacy appearance keys are preserved but ignored.
     const double uiScale = SCREEN_DPI / 300.0;
     FONT_BTN = qRound(32 * uiScale); FONT_MSG = qRound(30 * uiScale); GAP = qRound(16 * uiScale);
     BTN_MARGIN = qRound(12 * uiScale); BTN_HEIGHT = qRound(72 * uiScale); ICON_PX = qRound(32 * uiScale);
     BTN_RADIUS = 0; BTN_PEN = qMax(1.0, 2 * uiScale);
-    LONG_TAP_MS = int(num("long_tap_ms", 500, 150, 3000));
+    LONG_TAP_MS = int(qBound(350.0, num("long_tap_ms", 450, 150, 3000), 700.0));
     KEY_FONT_SET = false; FUNC_FONT_SET = false;
     KEY_FONT_PX = 0; FUNC_PX = 0;
     SEARCH_LIST_PX = ptToPx(10); SEARCH_LIST_FONT.clear();
@@ -701,11 +701,9 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this); p.setRenderHint(QPainter::Antialiasing, true);
-        const bool pressed = isDown();
-        if (pressed) p.fillRect(rect(), Qt::black);
         const qreal h = qMax(12, qMin(height() - 12, width() - 12));
         const QRectF box((width()-h)/2, (height()-h)/2, h, h);
-        const QColor ink = pressed ? Qt::white : Qt::black;
+        const QColor ink = Qt::black;
         p.setPen(QPen(ink, qMax(1.5, h / 20.0), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.setBrush(Qt::NoBrush); p.drawRect(box);
         if (isChecked()) {
@@ -1772,9 +1770,9 @@ static void kobrowse_open();
 enum SetType { S_NUM, S_FONT, S_BOOL, S_OPEN };
 struct SetItem { const char *key, *label; SetType type; double step, lo, hi; int dec; };
 static const SetItem SET_ITEMS[] = {
-    { "list_pt",       "Размер шрифта списка",    S_NUM,  0.5, 4,   24,   1 },
+    { "list_pt",       "Размер шрифта списка",    S_NUM,  0.5, 7,   14,   1 },
     { "list_font",     "Шрифт списка файлов",    S_FONT, 0,   0,   0,    0 },
-    { "long_tap_ms",   "Долгое нажатие",         S_NUM,  50,  150, 3000, 0 },
+    { "long_tap_ms",   "Долгое нажатие",         S_NUM,  50,  350, 700,  0 },
     { "allow_adds_edit", "Разрешить изменение .adds", S_BOOL, 0, 0, 1, 0 },
     { "trash_enabled", "Перемещать удалённое в корзину", S_BOOL, 0, 0, 1, 0 },
     { "logging_enabled", "Записывать журнал отладки", S_BOOL, 0, 0, 1, 0 },
@@ -1960,7 +1958,7 @@ public:
         m_msgTimer.setInterval(4000);
         connect(&m_msgTimer, &QTimer::timeout, this, [this]() {
             if (m_footerNotice) m_footerNotice->setMessage(QString());
-            if (m_settingsNotice) m_settingsNotice->setMessage(QString());
+            if (m_settingsNotice) { m_settingsNotice->setMessage(QString()); m_settingsNotice->hide(); }
         });
 
         // Диагностика настроек: геометрия строк через 0,4 с после показа
@@ -2005,7 +2003,23 @@ public:
         m_pickerShade->setObjectName(u8("pickerShade"));
         m_pickerShade->setStyleSheet(u8("QWidget#pickerShade{background-color:rgba(0,0,0,40);}"));
         m_pickerShade->hide();
-        m_fontPicker = new QTreeWidget(this);
+        m_pickerDialog = new QWidget(this); m_pickerDialog->setObjectName(u8("pickerDialog"));
+        m_pickerDialog->setStyleSheet(u8("QWidget#pickerDialog{border:2px solid black;background:white;}"));
+        QVBoxLayout *pickerLayout = new QVBoxLayout(m_pickerDialog);
+        pickerLayout->setContentsMargins(0, 0, 0, 0); pickerLayout->setSpacing(0);
+        m_pickerTitle = new QLabel(m_pickerDialog); m_pickerTitle->setFont(fMsg);
+        m_pickerTitle->setAlignment(Qt::AlignCenter); m_pickerTitle->setMinimumHeight(qMax(48, BTN_HEIGHT));
+        pickerLayout->addWidget(m_pickerTitle);
+        m_fontPicker = new QTreeWidget(m_pickerDialog);
+        pickerLayout->addWidget(m_fontPicker, 1);
+        QHBoxLayout *pickerButtons = new QHBoxLayout(); pickerButtons->setSpacing(0);
+        m_pickerCancel = makeButton(pickerButtons, fBtn, "Отмена", BTN_HEIGHT, 1);
+        m_pickerDone = makeButton(pickerButtons, fBtn, "Готово", BTN_HEIGHT, 1);
+        m_pickerCancel->setObjectName(u8("pickerCancel")); m_pickerDone->setObjectName(u8("pickerDone"));
+        pickerLayout->addLayout(pickerButtons);
+        connect(m_pickerCancel, &QPushButton::clicked, [this]() { m_pickerDialog->hide(); m_pickerShade->hide(); });
+        connect(m_pickerDone, &QPushButton::clicked, [this]() { chooseFont(m_fontPicker->currentItem()); });
+        m_pickerDialog->hide();
         m_fontPicker->setColumnCount(1); m_fontPicker->setHeaderHidden(true);
         m_fontPicker->setRootIsDecorated(false); m_fontPicker->setIndentation(0);
         m_fontPicker->setFont(fMsg);
@@ -2016,9 +2030,8 @@ public:
                                       "QTreeWidget::item{padding-left:12px;border-bottom:2px solid black;}"
                                       "QTreeWidget::item:selected,QTreeWidget::item:selected:!active{background:black;color:white;}"));
         m_fontPicker->setSelectionMode(QAbstractItemView::SingleSelection);
-        m_fontPicker->hide();
         connect(m_fontPicker, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
-            chooseFont(item);
+            if (item) m_fontPicker->setCurrentItem(item);
         });
         connect(m_actions, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *it, int) {
             if (it && (it->flags() & Qt::ItemIsEnabled)) runMenuAction(it->data(0, Qt::UserRole).toInt());
@@ -2442,8 +2455,17 @@ private:
     void tapAt(const QPoint &p, bool longTap) {
         if (m_fontPicker->isVisible()) {
             const QPoint pos = m_fontPicker->viewport()->mapFrom(this, p);
-            if (m_fontPicker->viewport()->rect().contains(pos)) chooseFont(m_fontPicker->itemAt(pos));
-            else { m_fontPicker->hide(); m_pickerShade->hide(); }
+            if (m_fontPicker->viewport()->rect().contains(pos)) {
+                QTreeWidgetItem *item = m_fontPicker->itemAt(pos);
+                if (item) m_fontPicker->setCurrentItem(item);
+            } else {
+                QWidget *target = childAt(p);
+                bool handled = false;
+                for (QWidget *cur = target; cur && cur != m_pickerDialog; cur = cur->parentWidget()) {
+                    if (cur == m_pickerDone || cur == m_pickerCancel) { static_cast<QPushButton *>(cur)->click(); handled = true; break; }
+                }
+                if (!handled && !m_pickerDialog->geometry().contains(p)) { m_pickerDialog->hide(); m_pickerShade->hide(); }
+            }
             return;
         }
         if (m_actions->isVisible()) {
@@ -2519,7 +2541,7 @@ private:
     }
 
     void showMessage(const QString &text) {
-        if (m_settings && m_settings->isVisible() && m_settingsNotice) m_settingsNotice->setMessage(text);
+        if (m_settings && m_settings->isVisible() && m_settingsNotice) { m_settingsNotice->setMessage(text); m_settingsNotice->show(); }
         else if (m_footerNotice) m_footerNotice->setMessage(text);
         m_msgTimer.start();
     }
@@ -3197,7 +3219,7 @@ private:
             if (group == GroupTrash || group == GroupBooks) {
                 QLabel *hint = new QLabel(group == GroupTrash
                     ? u8("При выключенной корзине файлы удаляются безвозвратно после подтверждения.")
-                    : u8("Авто — для 4.38; всегда — на свой риск."), body);
+                    : u8("Авто: открывать только на прошивках 4.38.x; Всегда: на свой риск; Никогда: не открывать."), body);
                 hint->setFont(fText); hint->setWordWrap(true); items->addWidget(hint);
             }
             for (int i = 0; i < SET_COUNT; ++i) {
@@ -3210,9 +3232,9 @@ private:
                 name->setFont(fText); name->setWordWrap(true); name->setMinimumWidth(0);
                 name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
                 if (isFontSizeSetting(u8(SET_ITEMS[i].key))) {
-                    QVBoxLayout *stack = new QVBoxLayout(line);
-                    stack->setContentsMargins(0, 0, 0, 0); stack->setSpacing(qMax(4, qRound(8 * sc)));
-                    stack->addWidget(name); stack->addLayout(r);
+                    line->setLayout(r);
+                    name->setFixedWidth(qMax(120, qRound(240 * sc)));
+                    r->addWidget(name);
                 } else {
                     line->setLayout(r);
                     QVBoxLayout *textColumn = new QVBoxLayout(); textColumn->setContentsMargins(0, 0, 0, 0); textColumn->setSpacing(2);
@@ -3246,15 +3268,7 @@ private:
                         m_setVals[i] = QString::number(value, 'f', SET_ITEMS[i].dec); refreshSettings();
                     };
                     slider->finished = [this]() { saveSettings(); };
-                    QVBoxLayout *scale = new QVBoxLayout(); scale->setContentsMargins(0, 0, 0, 0); scale->setSpacing(0);
-                    scale->addWidget(slider);
-                    QHBoxLayout *bounds = new QHBoxLayout(); bounds->setContentsMargins(0, 0, 0, 0);
-                    QLabel *low = new QLabel(QString::number(SET_ITEMS[i].lo, 'g', 6), line);
-                    QLabel *high = new QLabel(QString::number(SET_ITEMS[i].hi, 'g', 6), line);
-                    low->setFont(fText); high->setFont(fText); high->setAlignment(Qt::AlignRight);
-                    low->setObjectName(u8("rangeLow_%1").arg(i)); high->setObjectName(u8("rangeHigh_%1").arg(i));
-                    bounds->addWidget(low); bounds->addStretch(1); bounds->addWidget(high); scale->addLayout(bounds);
-                    r->addLayout(scale, 1);
+                    r->addWidget(slider, 1);
                     m_plusBtns[i] = makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
                     val = name;
                 } else if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
@@ -3263,15 +3277,18 @@ private:
                     pick->setFocusPolicy(Qt::NoFocus); pick->setMinimumHeight(rowH);
                     pick->setFixedWidth(qMax(160, qRound(360 * sc)));
                     pick->setProperty("choiceRowHeight", rowH);
-                    pick->setStyleSheet(u8("QPushButton{border:%1px solid black;background:white;color:black;}"
-                                           "QPushButton:pressed{background:black;color:white;}").arg(qMax(1, qRound(BTN_PEN))));
+                    pick->setStyleSheet(u8("QPushButton{border:0;background:white;color:black;}"
+                                           "QPushButton:pressed{background:white;color:black;}"));
                     pick->setProperty("settingsChoice", true);
                     QHBoxLayout *choiceLayout = new QHBoxLayout(pick); choiceLayout->setContentsMargins(4, 0, 4, 0);
-                    val = new QLabel(pick); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
+                    val = new QLabel(pick); val->setFont(fText); val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
                     val->setWordWrap(true); val->setMinimumWidth(0);
                     val->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
                     val->setAttribute(Qt::WA_TransparentForMouseEvents);
-                    choiceLayout->addWidget(val); r->addWidget(pick);
+                    choiceLayout->addWidget(val, 1);
+                    QLabel *arrow = new QLabel(u8("›"), pick); arrow->setFont(fText);
+                    arrow->setAttribute(Qt::WA_TransparentForMouseEvents); choiceLayout->addWidget(arrow);
+                    r->addWidget(pick);
                     connect(pick, &QPushButton::clicked, [this, i]() {
                         if (SET_ITEMS[i].type == S_FONT) openFontPicker(i); else openBookPicker(i);
                     });
@@ -3282,6 +3299,7 @@ private:
                 separator->setFrameShape(QFrame::NoFrame);
                 separator->setFixedHeight(qMax(1, qRound(1.5 * sc)));
                 separator->setStyleSheet(u8("background:black;")); items->addWidget(separator);
+                if (group == GroupTrash) separator->hide();
                 m_settingRows[i] = line; m_settingLines[i] = separator;
             }
             if (group == GroupFiles) {
@@ -3336,7 +3354,7 @@ private:
         m_settingsScroll->setWidget(content); v->addWidget(m_settingsScroll, 1);
         m_settingsNotice = new FooterNotice(m_settings); m_settingsNotice->setFont(fText);
         m_settingsNotice->setFixedHeight(QFontMetrics(fText).lineSpacing() * 2 + 4);
-        v->addWidget(m_settingsNotice);
+        v->addWidget(m_settingsNotice); m_settingsNotice->hide();
         v->addLayout(resets);
         setSettingsTab(0);
         m_settings->hide();
@@ -3352,16 +3370,17 @@ private:
             const QTreeWidgetItem *item = m_fontPicker->topLevelItem(i);
             textWidth = qMax(textWidth, QFontMetrics(item->font(0)).width(item->text(0)));
         }
-        const int w = qMin(availableW, qMax(width() / 2, textWidth + 4 * margin));
-        const int desired = m_fontPicker->topLevelItemCount() * qMax(48, BTN_HEIGHT) + 6;
+        const int w = qMin(availableW, qMax(width() * 4 / 5, textWidth + 4 * margin));
+        const int desired = (m_fontPicker->topLevelItemCount() + 2) * qMax(48, BTN_HEIGHT) + 8;
         const int h = qMin(availableH, qMin(qMax(1, height() * 2 / 3), desired));
-        m_fontPicker->setGeometry((width() - w) / 2, (height() - h) / 2, w, h);
+        m_pickerDialog->setGeometry((width() - w) / 2, (height() - h) / 2, w, h);
     }
 
     void openFontPicker(int row) {
         if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_FONT) return;
         m_fontPickerRow = row;
         m_pickerIsBooks = false;
+        m_pickerTitle->setText(u8("Шрифт списка файлов"));
         m_fontPicker->clear();
         QTreeWidgetItem *current = nullptr;
         for (int n = 0; n < m_fonts.size(); ++n) {
@@ -3376,13 +3395,14 @@ private:
         }
         placePicker();
         m_pickerShade->setGeometry(rect()); m_pickerShade->show(); m_pickerShade->raise();
-        m_fontPicker->show(); m_fontPicker->raise();
+        m_pickerDialog->show(); m_pickerDialog->raise();
         if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void openBookPicker(int row) {
         if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_OPEN) return;
         m_fontPickerRow = row; m_pickerIsBooks = true;
+        m_pickerTitle->setText(u8("Открытие книг"));
         m_fontPicker->clear();
         const char *labels[] = { "Авто — только 4.38", "Всегда — на свой риск", "Никогда" };
         QTreeWidgetItem *current = nullptr;
@@ -3396,7 +3416,7 @@ private:
         }
         placePicker();
         m_pickerShade->setGeometry(rect()); m_pickerShade->show(); m_pickerShade->raise();
-        m_fontPicker->show(); m_fontPicker->raise();
+        m_pickerDialog->show(); m_pickerDialog->raise();
         if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
@@ -3413,7 +3433,7 @@ private:
                 refreshSettings();
             }
         }
-        m_fontPicker->hide(); m_pickerShade->hide();
+        m_pickerDialog->hide(); m_pickerShade->hide();
         if (n >= 0) saveSettings();
     }
 
@@ -3498,7 +3518,7 @@ private:
         m_footerLine->setVisible(!on);
         m_info->hide();
         if (m_footerNotice) m_footerNotice->setMessage(QString());
-        if (m_settingsNotice) m_settingsNotice->setMessage(QString());
+        if (m_settingsNotice) { m_settingsNotice->setMessage(QString()); m_settingsNotice->hide(); }
         m_settings->setVisible(on);
         if (on) {
             if (m_menuRequested) {
@@ -3556,7 +3576,7 @@ private:
             if (m_setLabels[i]) {
                 if (SET_ITEMS[i].type == S_NUM) {
                     const QString suffix = QString::fromLatin1(SET_ITEMS[i].key) == u8("list_pt") ? u8(" пт") : u8(" мс");
-                    m_setLabels[i]->setText(u8(SET_ITEMS[i].label) + u8(", ") + v + suffix);
+                    m_setLabels[i]->setText(u8(SET_ITEMS[i].label) + u8("\nСейчас: ") + v + suffix);
                 } else m_setLabels[i]->setText(shown);
                 if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
                     QPushButton *button = qobject_cast<QPushButton *>(m_setLabels[i]->parentWidget());
@@ -3601,9 +3621,13 @@ private:
 
     // Apply the saved draft in place, keeping navigation and clipboard.
     void saveSettings() {
-        QStringList keys;
-        for (int i = 0; i < SET_COUNT; ++i) keys << u8(SET_ITEMS[i].key);
-        if (!saveConfig(keys, m_setVals)) {
+        QStringList keys, values;
+        for (int i = 0; i < SET_COUNT; ++i) {
+            if (i >= m_initialSetVals.size() || m_setVals[i] != m_initialSetVals[i]) {
+                keys << u8(SET_ITEMS[i].key); values << m_setVals[i];
+            }
+        }
+        if (!keys.isEmpty() && !saveConfig(keys, values)) {
             m_setVals = m_initialSetVals; m_resetHomeDraft = false;
             refreshSettings(); updateHomeDraft(); showMessage(u8("Не удалось записать kobrowse.ini")); return;
         }
@@ -3654,7 +3678,9 @@ private:
     bool          m_menuTouch = false, m_fontPickerTouch = false, m_pickerIsBooks = false;
     int           m_menuScrollStart = 0, m_fontPickerScrollStart = 0, m_fontPickerRow = -1;
     QTreeWidget *m_fontPicker = nullptr;
-    QWidget *m_pickerShade = nullptr;
+    QWidget *m_pickerShade = nullptr, *m_pickerDialog = nullptr;
+    QLabel *m_pickerTitle = nullptr;
+    QPushButton *m_pickerDone = nullptr, *m_pickerCancel = nullptr;
     bool          m_holdFired = false, m_holdBlank = false, m_menuRequested = false, m_swipeList = false;
     int           m_pendingDelete = 0, m_confirmSetting = -1;
     QPoint        m_pressPos;
@@ -4032,7 +4058,7 @@ static int kobrowse_init() {
         return 0;
     }
     g_sleepRetry = new QTimer(QCoreApplication::instance());
-    g_sleepRetry->setInterval(100);
+    g_sleepRetry->setInterval(25);
     QObject::connect(g_sleepRetry, &QTimer::timeout, []() { restoreAfterSleep(); });
     g_lifecycleClose = new QTimer();
     g_lifecycleClose->setSingleShot(true); g_lifecycleClose->setInterval(0);
