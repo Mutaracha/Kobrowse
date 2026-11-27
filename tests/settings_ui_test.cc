@@ -268,7 +268,7 @@ public:
             const QLabel *rangeLow = w.findChild<QLabel *>(QString("rangeLow_%1").arg(hold));
             const QLabel *rangeHigh = w.findChild<QLabel *>(QString("rangeHigh_%1").arg(hold));
             require(rangeLow && rangeHigh && rangeLow->text() == "150" && rangeHigh->text() == "3000", "slider endpoints labelled");
-            require(w.m_setLabels[hold]->text().contains(QString::fromUtf8("400 мс")), "slider value appears next to title");
+            require(w.m_setLabels[hold]->text().contains(QString::number(LONG_TAP_MS) + QString::fromUtf8(" мс")), "slider value appears next to title");
             const ButtonFace *face = reset->findChild<ButtonFace *>();
             require(face && face->width() >= QFontMetrics(face->font()).width(face->text()) + 2 * BTN_MARGIN,
                     "reset button label fits without clipping");
