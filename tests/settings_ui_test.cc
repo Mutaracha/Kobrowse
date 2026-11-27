@@ -137,6 +137,9 @@ class SettingsUiTest {
         w.onItem(&item);
         w.findChild<QPushButton *>("confirmYes")->click();
         require(w.m_busy && w.m_workOverlay->isVisible(), "extract shows busy message");
+        require(w.m_workTimer.isActive() && w.m_workTimer.interval() >= 500
+                && !QFileInfo(w.m_root + "/fixture-book_1.txt").exists(),
+                "overlay is shown before deferred extraction starts");
         touch(w, QEvent::TouchBegin, QPoint(1, 1)); touch(w, QEvent::TouchEnd, QPoint(1, 1));
         require(w.m_busy && w.m_workOverlay->isVisible(), "busy overlay blocks touch");
         w.m_workTimer.stop(); QMetaObject::invokeMethod(&w.m_workTimer, "timeout", Qt::DirectConnection);
@@ -163,6 +166,8 @@ class SettingsUiTest {
         touch(w, QEvent::TouchBegin, start);
         touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
         require(fake.begins == 1 && fake.level > 40 && w.m_brightnessTracking, "edge drag adjusts brightness");
+        require(w.m_deviceStatus->findChild<QLabel *>("statusBuild")->text().contains(QString::fromUtf8("Яркость:")),
+                "brightness appears in top status instead of build");
         touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
         require(fake.saves == 1 && w.m_pageIndex == page && !w.m_brightnessTracking, "release saves without turning page");
         const int saved = fake.level;
@@ -170,6 +175,8 @@ class SettingsUiTest {
         touch(w, QEvent::TouchUpdate, start + QPoint(0, 100));
         touch(w, QEvent::TouchCancel, start, 0);
         require(fake.cancels == 1 && fake.level == saved, "touch cancel restores brightness");
+        require(w.m_deviceStatus->findChild<QLabel *>("statusBuild")->text().startsWith("#"),
+                "cancel restores build status");
         touch(w, QEvent::TouchBegin, start);
         touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
         touch(w, QEvent::TouchUpdate, start - QPoint(0, 100), 2);
@@ -260,7 +267,8 @@ public:
         require(w.m_busy && w.m_workOverlay->isVisible(), "empty trash shows busy message");
         w.m_workTimer.stop(); QMetaObject::invokeMethod(&w.m_workTimer, "timeout", Qt::DirectConnection);
         require(!QFileInfo(trashFixture).exists(), "confirmed empty trash removes fixture");
-        w.goUp(); QApplication::processEvents(); require(!w.m_emptyTrashButton->isVisible(), "empty trash button hidden elsewhere");
+        w.m_trashButton->click(); QApplication::processEvents();
+        require(w.m_path == w.m_root && !w.m_emptyTrashButton->isVisible(), "trash icon closes trash and returns to folder");
         w.showSettings(true); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings fit screen");
         const int font = row("list_pt"), family = row("list_font"), hold = row("long_tap_ms");
@@ -271,6 +279,9 @@ public:
         QPushButton *close = w.findChild<QPushButton *>("closeSettings");
         require(yes && no && reset && close, "settings controls exist");
         require(!w.findChild<QPushButton *>("resetAll"), "no global reset");
+        require(w.m_homeStatus->parentWidget() == w.m_resetHomeButton->parentWidget(), "home path and reset share a row");
+        require(w.m_resetHomeButton->width() >= QFontMetrics(w.m_resetHomeButton->findChild<ButtonFace *>()->font()).width(QString::fromUtf8("Сбросить домашнюю папку")),
+                "home reset text is not clipped");
         require(w.m_sliders[hold] && w.m_minusBtns[hold] && w.m_plusBtns[hold], "hold time uses slider and buttons");
         require(w.m_sliders[font] && w.m_minusBtns[font] && w.m_plusBtns[font], "font slider has buttons");
         for (int screenWidth : {600, 768, 1180}) {

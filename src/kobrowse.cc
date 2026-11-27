@@ -386,26 +386,28 @@ public:
             p->drawPath(folder);
             p->setBrush(Qt::NoBrush);
         } else {
-            const QRectF box = r.adjusted(sz * .13, sz * .07, -sz * .13, -sz * .07);
-            p->drawRect(box);
+            const QRectF box = r.adjusted(sz * .03, sz * .07, -sz * .03, -sz * .07);
             const int kind = idx.data(ROLE_KIND).toInt();
-            if (kind == FileBook) {
-                p->drawLine(QPointF(box.left() + sz * .12, box.top()), QPointF(box.left() + sz * .12, box.bottom()));
-                p->drawLine(QPointF(box.left() + sz * .23, box.top() + sz * .27), QPointF(box.right() - sz * .10, box.top() + sz * .27));
-                p->drawLine(QPointF(box.left() + sz * .23, box.top() + sz * .40), QPointF(box.right() - sz * .10, box.top() + sz * .40));
-            } else if (kind == FileFb2 || kind == FilePdf) {
-                // A book spine and large, explicit format badge stay legible
-                // at the physical size used by e-ink displays.
-                p->drawLine(QPointF(box.left() + sz * .10, box.top()), QPointF(box.left() + sz * .10, box.bottom()));
-                QFont badge(u8("Sans Serif")); badge.setBold(true); badge.setPixelSize(qMax(9, qRound(sz * .23)));
+            if (kind != FileArchive && kind != FileBook && kind != FileFb2 && kind != FilePdf && kind != FileEpub) p->drawRect(box);
+            if (kind == FileBook || kind == FileFb2 || kind == FilePdf || kind == FileEpub) {
+                // Book outline based on the supplied FB2 reference, with a thin spine.
+                QPainterPath book;
+                book.moveTo(box.right(), box.top()); book.lineTo(box.left() + sz * .18, box.top());
+                book.cubicTo(box.left(), box.top(), box.left(), box.top() + sz * .13, box.left(), box.top() + sz * .2);
+                book.lineTo(box.left(), box.bottom() - sz * .16);
+                book.cubicTo(box.left(), box.bottom() - sz * .04, box.left() + sz * .08, box.bottom(), box.left() + sz * .18, box.bottom());
+                book.lineTo(box.right(), box.bottom());
+                book.moveTo(box.left(), box.bottom() - sz * .16);
+                book.cubicTo(box.left(), box.bottom() - sz * .27, box.left() + sz * .08, box.bottom() - sz * .30, box.left() + sz * .18, box.bottom() - sz * .30);
+                book.lineTo(box.right(), box.bottom() - sz * .30); book.lineTo(box.right(), box.top());
+                p->drawPath(book);
+                QString ext = QFileInfo(idx.data().toString()).suffix().toUpper();
+                if (ext.isEmpty()) ext = u8("TXT");
+                QFont badge(u8("Sans Serif")); badge.setWeight(QFont::Black);
+                int badgeSize = qMax(8, qRound(sz * .30)); badge.setPixelSize(badgeSize);
+                while (badgeSize > 8 && QFontMetrics(badge).width(ext) > box.width() * .82) badge.setPixelSize(--badgeSize);
                 p->setFont(badge);
-                p->drawText(box.adjusted(sz * .10, 0, 0, 0), Qt::AlignCenter, kind == FileFb2 ? u8("FB2") : u8("PDF"));
-            } else if (kind == FileEpub) {
-                p->drawLine(QPointF(box.center().x(), box.top() + sz * .18), QPointF(box.center().x(), box.bottom() - sz * .16));
-                p->drawLine(QPointF(box.left() + sz * .06, box.top() + sz * .26), QPointF(box.center().x(), box.top() + sz * .34));
-                p->drawLine(QPointF(box.center().x(), box.top() + sz * .34), QPointF(box.right() - sz * .06, box.top() + sz * .26));
-                p->drawLine(QPointF(box.left() + sz * .06, box.bottom() - sz * .25), QPointF(box.center().x(), box.bottom() - sz * .17));
-                p->drawLine(QPointF(box.center().x(), box.bottom() - sz * .17), QPointF(box.right() - sz * .06, box.bottom() - sz * .25));
+                p->drawText(QRectF(box.left() + sz * .08, box.top(), box.width() - sz * .13, box.height() * .70), Qt::AlignCenter, ext);
             } else if (kind == FileImage) {
                 p->drawEllipse(QPointF(box.left() + sz * .20, box.top() + sz * .21), sz * .06, sz * .06);
                 QPolygonF mountains;
@@ -416,11 +418,14 @@ public:
                           << QPointF(box.right() - sz * .05, box.bottom() - sz * .10);
                 p->drawPolyline(mountains);
             } else if (kind == FileArchive) {
-                p->save();
-                p->fillRect(box.adjusted(sz * .07, sz * .07, -sz * .07, -sz * .07), p->pen().color());
-                p->setPen(QPen(mark ? Qt::black : Qt::white, qMax(1, sz / 14), Qt::DashLine));
-                p->drawLine(QPointF(box.center().x(), box.top() + sz * .10), QPointF(box.center().x(), box.bottom() - sz * .14));
-                p->restore();
+                // Three bound volumes, modelled on the supplied archive icon.
+                const qreal x = box.left(), y = box.top(), w = box.width(), h = box.height();
+                p->drawRoundedRect(box, sz * .09, sz * .09);
+                p->drawLine(QPointF(x, y + h / 3), QPointF(x + w, y + h / 3));
+                p->drawLine(QPointF(x, y + 2*h / 3), QPointF(x + w, y + 2*h / 3));
+                p->drawLine(QPointF(x + w*.62, y), QPointF(x + w*.62, y+h));
+                p->drawLine(QPointF(x + w*.75, y), QPointF(x + w*.75, y+h));
+                p->setBrush(Qt::white); p->drawRect(QRectF(x + w*.55, y + h*.40, w*.27, h*.20)); p->setBrush(Qt::NoBrush);
             }
         }
         p->setPen(ink);
@@ -550,7 +555,7 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         break;
     }
     case I_CHEV_UP: {
-        QPolygonF a; a << QPointF(3, 17) << QPointF(12, 5) << QPointF(21, 17);
+        QPolygonF a; a << QPointF(3, 18) << QPointF(12, 6) << QPointF(21, 18);
         p->setPen(Qt::NoPen); p->setBrush(c); p->drawPolygon(a);
         break;
     }
@@ -688,16 +693,16 @@ protected:
         QPainter p(this); p.setRenderHint(QPainter::Antialiasing, true);
         const bool pressed = isDown();
         if (pressed) p.fillRect(rect(), Qt::black);
-        const qreal h = qMax(12, qMin(height() - 8, width() / 2));
-        const QRectF track((width() - 2*h)/2, (height()-h)/2, 2*h, h);
-        p.setPen(QPen(pressed ? Qt::white : Qt::black, qMax(1.0, h / 18.0)));
-        p.setBrush((isChecked() != pressed) ? Qt::black : Qt::white);
-        p.drawRoundedRect(track, h/2, h/2);
-        p.setBrush((isChecked() != pressed) ? Qt::white : Qt::black);
-        p.setPen(Qt::NoPen);
-        const qreal d = h * 0.7;
-        p.drawEllipse(QRectF(isChecked() ? track.right()-d-h*.15 : track.left()+h*.15,
-                             track.top()+h*.15, d, d));
+        const qreal h = qMax(12, qMin(height() - 12, width() - 12));
+        const QRectF box((width()-h)/2, (height()-h)/2, h, h);
+        const QColor ink = pressed ? Qt::white : Qt::black;
+        p.setPen(QPen(ink, qMax(1.5, h / 20.0), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush); p.drawRect(box);
+        if (isChecked()) {
+            QPolygonF check; check << QPointF(box.left()+h*.18, box.top()+h*.52)
+                << QPointF(box.left()+h*.42, box.top()+h*.75) << QPointF(box.left()+h*.84, box.top()+h*.24);
+            p.drawPolyline(check);
+        }
     }
 };
 
@@ -1873,26 +1878,26 @@ public:
         toolbar->addWidget(back); toolbar->addStretch(1);
         ChromeButton *find = new ChromeButton(I_SEARCH, QString(), m_toolbar);
         ChromeButton *settings = new ChromeButton(I_GEAR, QString(), m_toolbar);
-        find->setIconScale(1.25); settings->setIconScale(1.25);
+        find->setIconScale(1.5); settings->setIconScale(1.5);
         find->setAccessibleName(u8("Поиск")); settings->setAccessibleName(u8("Настройки"));
         const int chromeHeight = qMax(48, qRound(72 * SCREEN_DPI / 300.0));
         find->setFixedSize(chromeHeight, chromeHeight); settings->setFixedSize(chromeHeight, chromeHeight);
         ChromeButton *home = new ChromeButton(I_HOME, QString(), m_toolbar);
-        home->setIconScale(1.25); home->setAccessibleName(u8("Домашняя папка")); home->setFixedSize(chromeHeight, chromeHeight);
+        home->setIconScale(1.5); home->setAccessibleName(u8("Домашняя папка")); home->setFixedSize(chromeHeight, chromeHeight);
         toolbar->addWidget(home);
         connect(home, &QPushButton::clicked, [this]() {
             clearSelection(); m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME)); load();
         });
         m_trashButton = new ChromeButton(I_TRASH, QString(), m_toolbar);
-        m_trashButton->setIconScale(1.25); m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
+        m_trashButton->setIconScale(1.5); m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
         m_trashButton->setVisible(TRASH_ENABLED); toolbar->addWidget(m_trashButton);
-        connect(m_trashButton, &QPushButton::clicked, [this]() { openTrash(); });
+        connect(m_trashButton, &QPushButton::clicked, [this]() { if (pathWithin(m_path, m_trash)) { m_path = m_trash; goUp(); } else openTrash(); });
         m_emptyTrashButton = new ChromeButton(I_TRASH, u8("Очистить корзину"), m_toolbar, true);
         m_emptyTrashButton->setObjectName(u8("emptyTrash"));
         m_emptyTrashButton->setFont(backFont);
         m_emptyTrashButton->setMinimumHeight(chromeHeight);
         m_emptyTrashButton->setFixedWidth(QFontMetrics(backFont).width(u8("Очистить корзину")) + qRound(ICON_PX * 1.25) + 36);
-        m_emptyTrashButton->hide(); toolbar->addWidget(m_emptyTrashButton);
+        m_emptyTrashButton->hide(); toolbar->insertWidget(toolbar->indexOf(home), m_emptyTrashButton);
         connect(m_emptyTrashButton, &QPushButton::clicked, [this]() { requestDeletion(2); });
         toolbar->addWidget(find); toolbar->addWidget(settings);
         connect(back, &QPushButton::clicked, [this]() { close(); });
@@ -1988,7 +1993,7 @@ public:
         m_actions->hide();
         m_pickerShade = new QWidget(this);
         m_pickerShade->setObjectName(u8("pickerShade"));
-        m_pickerShade->setStyleSheet(u8("QWidget#pickerShade{background-color:rgba(0,0,0,90);}"));
+        m_pickerShade->setStyleSheet(u8("QWidget#pickerShade{background-color:rgba(0,0,0,40);}"));
         m_pickerShade->hide();
         m_fontPicker = new QTreeWidget(this);
         m_fontPicker->setColumnCount(1); m_fontPicker->setHeaderHidden(true);
@@ -2085,7 +2090,9 @@ public:
         const int footerHeight = qMax(qMax(40, chromeHeight * 3 / 4), QFontMetrics(fMsg).lineSpacing() * 2 + 4);
         m_prev->setFixedSize(footerHeight, footerHeight); m_next->setFixedSize(footerHeight, footerHeight);
         footer->addWidget(m_prev, 0, Qt::AlignVCenter); footer->addWidget(m_next, 0, Qt::AlignVCenter);
-        m_pageLabel = new QLabel(m_nav); m_pageLabel->setFont(fMsg);
+        m_pageLabel = new QLabel(m_nav);
+        QFont pageNumberFont = fMsg; pageNumberFont.setFamily(u8("Monospace")); pageNumberFont.setStyleHint(QFont::Monospace);
+        m_pageLabel->setFont(pageNumberFont);
         m_pageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         footer->addWidget(m_pageLabel);
         m_footerNotice = new FooterNotice(m_nav); m_footerNotice->setFont(fMsg);
@@ -2111,7 +2118,7 @@ public:
     }
 
     ~KobrowseWindow() { klog(u8("window closed")); cancelBrightness(); qApp->removeEventFilter(this); }
-    void resumeDeferredWork() { if (m_busy && m_work && !m_workTimer.isActive()) m_workTimer.start(100); }
+    void resumeDeferredWork() { if (m_busy && m_work && !m_workTimer.isActive()) m_workTimer.start(600); }
 
 protected:
     // Касания обрабатываем сами: TouchBegin нужно принять, иначе TouchEnd не придёт.
@@ -2302,6 +2309,7 @@ protected:
                     klog(saved ? u8("brightness gesture completed") : u8("brightness gesture finish failed"));
                     if (!saved) showMessage(u8("Не удалось завершить изменение яркости"));
                     m_brightnessTracking = false;
+                    m_deviceStatus->hideBrightnessSoon();
                 }
                 m_brightnessGesture.cancel(); m_brightnessConsumed = false;
                 m_holdTimer.stop(); m_holdPath.clear(); m_twoFinger = false;
@@ -2386,6 +2394,7 @@ private:
             klog(restored ? u8("brightness gesture cancelled") : u8("brightness: could not restore cancelled gesture"));
         }
         m_brightnessGesture.cancel();
+        if (m_deviceStatus) m_deviceStatus->clearBrightness();
     }
     void updateBrightness(const QPoint &point) {
         const int desired = qBound(0, m_brightnessBackend->startLevel() + m_brightnessGesture.change(point), 100);
@@ -2395,7 +2404,7 @@ private:
             showMessage(u8("Не удалось изменить яркость"));
             return;
         }
-        showMessage(u8("Яркость: %1%").arg(actual));
+        m_deviceStatus->showBrightness(actual);
     }
     bool inList(const QPoint &p) const {
         QWidget *w = childAt(p);
@@ -2676,9 +2685,9 @@ private:
         if (m_busy) return;
         m_busy = true; m_work = work; m_operationDetail.clear(); m_holdTimer.stop();
         m_workText->setText(text); m_workOverlay->setGeometry(rect());
-        m_workOverlay->show(); m_workOverlay->raise(); m_workOverlay->update();
-        // Give the normal event loop a chance to paint before blocking I/O.
-        m_workTimer.start(100);
+        m_workOverlay->show(); m_workOverlay->raise(); m_workOverlay->repaint();
+        // Allow the e-ink compositor to present the overlay before synchronous I/O.
+        m_workTimer.start(600);
     }
 
     // Вставить буфер в текущую папку
@@ -3268,10 +3277,11 @@ private:
             if (group == GroupFiles) {
                 m_homeStatus = new QLabel(body);
                 m_homeStatus->setFont(fText); m_homeStatus->setWordWrap(true);
-                m_homeStatus->setTextFormat(Qt::PlainText); items->addWidget(m_homeStatus);
-                QHBoxLayout *actions = new QHBoxLayout();
+                m_homeStatus->setTextFormat(Qt::PlainText); m_homeStatus->setMinimumWidth(0);
+                m_homeStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+                QHBoxLayout *actions = new QHBoxLayout(); actions->addWidget(m_homeStatus, 1);
                 m_resetHomeButton = makeButton(actions, fBtn, "Сбросить домашнюю папку", rowH, 0);
-                m_resetHomeButton->setMaximumWidth(QFontMetrics(fBtn).width(u8("Сбросить домашнюю папку")) + 2 * BTN_MARGIN + 8); actions->addStretch(1);
+                m_resetHomeButton->setMinimumWidth(QFontMetrics(fBtn).width(u8("Сбросить домашнюю папку")) + 2 * BTN_MARGIN + 8);
                 connect(m_resetHomeButton, &QPushButton::clicked, [this]() {
                     m_resetHomeDraft = true; saveSettings(); updateHomeDraft();
                 });
@@ -3280,14 +3290,14 @@ private:
                 QHBoxLayout *actions = new QHBoxLayout();
                 QPushButton *empty = makeButton(actions, fBtn, "Очистить корзину", rowH, 0);
                 empty->setObjectName(u8("settingsEmptyTrash"));
-                empty->setMaximumWidth(QFontMetrics(fBtn).width(u8("Очистить корзину")) + 2 * BTN_MARGIN + 8); actions->addStretch(1);
+                empty->setFixedWidth(QFontMetrics(fBtn).width(u8("Очистить корзину")) + 2 * BTN_MARGIN + 8); actions->addStretch(1);
                 connect(empty, &QPushButton::clicked, [this]() { leaveSettingsForTrash(true); });
                 items->addLayout(actions);
             } else if (group == GroupLogging) {
                 QHBoxLayout *actions = new QHBoxLayout();
                 QPushButton *clearLogs = makeButton(actions, fBtn, "Очистить журнал", rowH, 0);
                 clearLogs->setObjectName(u8("settingsClearLog"));
-                clearLogs->setMaximumWidth(QFontMetrics(fBtn).width(u8("Очистить журнал")) + 2 * BTN_MARGIN + 8); actions->addStretch(1);
+                clearLogs->setFixedWidth(QFontMetrics(fBtn).width(u8("Очистить журнал")) + 2 * BTN_MARGIN + 8); actions->addStretch(1);
                 connect(clearLogs, &QPushButton::clicked, [this]() {
                     m_pendingDelete = 3;
                     m_confirmText->setText(u8("Очистить журнал Kobrowse? Это действие нельзя отменить."));
@@ -3719,11 +3729,15 @@ static void restoreAfterSleep() {
     if (!g_win && !g_search) { g_sleepRetry->stop(); return; }
     if (!nativeWakeReady()) return;
     g_sleepRetry->stop();
-    if (g_win && g_win->property("kobrowseSleepHidden").toBool()) {
-        g_win->setProperty("kobrowseSleepHidden", false); g_win->show(); g_win->raise(); g_win->resumeDeferredWork();
-    }
-    if (g_search && g_search->property("kobrowseSleepHidden").toBool()) {
+    const bool restoreSearch = g_search && g_search->property("kobrowseSleepHidden").toBool();
+    if (restoreSearch) {
         g_search->setProperty("kobrowseSleepHidden", false); g_search->show(); g_search->raise();
+    }
+    if (g_win && g_win->property("kobrowseSleepHidden").toBool()) {
+        g_win->setProperty("kobrowseSleepHidden", false); g_win->show();
+        if (restoreSearch && g_win->parentWidget() == g_search->parentWidget()) g_win->stackUnder(g_search);
+        else g_win->raise();
+        g_win->resumeDeferredWork();
     }
     klog(u8("sleep: restored after native views closed"));
 }

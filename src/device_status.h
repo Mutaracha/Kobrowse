@@ -73,6 +73,17 @@ public:
             connect(app, &QGuiApplication::applicationStateChanged, this,
                     [this](Qt::ApplicationState state) { if (state == Qt::ApplicationActive) refresh(); });
         timer.start(60000); refresh();
+        brightnessTimer.setSingleShot(true);
+        connect(&brightnessTimer, &QTimer::timeout, this, [this]() { clearBrightness(); });
+    }
+    void showBrightness(int percent) {
+        brightnessTimer.stop();
+        m_build->setText(QString::fromUtf8("Яркость: %1%").arg(percent));
+    }
+    void hideBrightnessSoon() { brightnessTimer.start(1500); }
+    void clearBrightness() {
+        brightnessTimer.stop();
+        m_build->setText(QString::fromLatin1("#%1 %2").arg(QLatin1String(KOBROWSE_BUILD_NUMBER), QLatin1String(KOBROWSE_BUILD_COMMIT)));
     }
     void setStatusFont(const QFont &font) {
         setFont(font);
@@ -102,6 +113,6 @@ private:
     QString powerDirectory;
     QLabel *m_clock = nullptr, *m_build = nullptr, *m_battery = nullptr;
     BatteryIcon *m_icon = nullptr;
-    QTimer timer;
+    QTimer timer, brightnessTimer;
 };
 #endif
