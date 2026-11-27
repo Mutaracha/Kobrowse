@@ -613,6 +613,7 @@ public:
         setFocusPolicy(Qt::NoFocus);
         setAccessibleName(text);
     }
+    void setIconScale(qreal scale) { m_iconScale = scale; update(); }
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
@@ -621,7 +622,7 @@ protected:
             p.setRenderHint(QPainter::Antialiasing, true); p.setPen(QPen(ink, qMax(1.0, BTN_PEN)));
             p.setBrush(Qt::white); p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), BTN_RADIUS, BTN_RADIUS);
         }
-        const int iconSize = (m_icon == I_CHEV_UP || m_icon == I_CHEV_DOWN) ? qRound(ICON_PX * 1.6) : ICON_PX;
+        const int iconSize = qRound(ICON_PX * m_iconScale * ((m_icon == I_CHEV_UP || m_icon == I_CHEV_DOWN) ? 1.6 : 1.0));
         const int size = qMin(iconSize, qMin(height() - 8, width() - 8));
         if (size <= 0) return;
         const int left = m_text.isEmpty() ? (width() - size) / 2 : (m_framed ? 12 : 4);
@@ -636,6 +637,7 @@ private:
     Icon m_icon;
     QString m_text;
     bool m_framed;
+    qreal m_iconScale = 1.0;
 };
 
 // Рисованный переключатель: одинаково виден на Qt 5 и e-ink.
@@ -1813,22 +1815,24 @@ public:
         toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(GAP);
         ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar, true);
         QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(8 * SCREEN_DPI / 72.0)));
-        back->setFont(backFont); back->setMinimumHeight(qMax(48, qRound(72 * SCREEN_DPI / 300.0)));
-        back->setFixedWidth(QFontMetrics(backFont).width(u8("Закрыть Kobrowse")) + ICON_PX + 36);
+        back->setFont(backFont); back->setIconScale(1.25);
+        back->setMinimumHeight(qMax(48, qRound(72 * SCREEN_DPI / 300.0)));
+        back->setFixedWidth(QFontMetrics(backFont).width(u8("Закрыть Kobrowse")) + qRound(ICON_PX * 1.25) + 36);
         toolbar->addWidget(back); toolbar->addStretch(1);
         ChromeButton *find = new ChromeButton(I_SEARCH, QString(), m_toolbar);
         ChromeButton *settings = new ChromeButton(I_GEAR, QString(), m_toolbar);
+        find->setIconScale(1.25); settings->setIconScale(1.25);
         find->setAccessibleName(u8("Поиск")); settings->setAccessibleName(u8("Настройки"));
         const int chromeHeight = qMax(48, qRound(72 * SCREEN_DPI / 300.0));
         find->setFixedSize(chromeHeight, chromeHeight); settings->setFixedSize(chromeHeight, chromeHeight);
         ChromeButton *home = new ChromeButton(I_HOME, QString(), m_toolbar);
-        home->setAccessibleName(u8("Домашняя папка")); home->setFixedSize(chromeHeight, chromeHeight);
+        home->setIconScale(1.25); home->setAccessibleName(u8("Домашняя папка")); home->setFixedSize(chromeHeight, chromeHeight);
         toolbar->addWidget(home);
         connect(home, &QPushButton::clicked, [this]() {
             clearSelection(); m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME)); load();
         });
         m_trashButton = new ChromeButton(I_TRASH, QString(), m_toolbar);
-        m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
+        m_trashButton->setIconScale(1.25); m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
         m_trashButton->setVisible(TRASH_ENABLED); toolbar->addWidget(m_trashButton);
         connect(m_trashButton, &QPushButton::clicked, [this]() { openTrash(); });
         toolbar->addWidget(find); toolbar->addWidget(settings);
@@ -2849,6 +2853,7 @@ private:
         QFont titleFont = fText; titleFont.setBold(true); title->setFont(titleFont);
         header->addWidget(title); header->addStretch(1);
         ChromeButton *closeSettings = new ChromeButton(I_CLOSE, QString(), m_settings);
+        closeSettings->setIconScale(1.25);
         closeSettings->setObjectName(u8("closeSettings")); closeSettings->setAccessibleName(u8("Закрыть настройки"));
         const int headSize = qMax(48, qRound(72 * SCREEN_DPI / 300.0));
         closeSettings->setFixedSize(headSize, headSize); header->addWidget(closeSettings);
