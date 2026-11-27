@@ -56,7 +56,7 @@ class SettingsUiTest {
             w.resize(width, 1024); QApplication::processEvents();
             const QString shown = w.m_fileDelegate->displayedName(index);
             require(!shown.contains(QLatin1Char('\n')), "file name remains a single line");
-            const int available = w.m_list->viewport()->width() * 54 / 100 - qMax(32, 2 * ICON_PX) - 18;
+            const int available = browserColumns(w.m_list->viewport()->width(), w.m_list->font()).name - qMax(32, 2 * ICON_PX) - 18;
             require(QFontMetrics(w.m_list->font()).width(shown) <= available, "elided name fits viewport");
             if (shown != name) require(shown.endsWith(QString::fromUtf8(".epub")), "elision preserves extension");
         }
@@ -229,8 +229,15 @@ public:
         require(missing.findChild<QLabel *>("statusFree")->text().contains("--"), "unavailable storage reported without bogus value");
         require(clock->font().family() == batteryLabel->font().family() && build->font().family() == clock->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
-        require(w.m_actions->font().pixelSize() == w.m_list->font().pixelSize()
-                && w.m_actions->font().family() == w.m_list->font().family(), "context menu uses list font and size");
+        require(w.m_actions->font().pixelSize() == ptToPx(12)
+                && w.m_actions->font().family() == w.m_list->font().family(), "context menu uses fixed 12pt size");
+        require(w.m_deviceStatus->layout()->contentsMargins().left() == 32
+                && w.m_deviceStatus->layout()->contentsMargins().right() == 32, "status edges have extra margins");
+        require(w.m_pathLabel->geometry().bottom() + 1 == w.m_columnHeader->geometry().top(), "path and columns touch");
+        require(w.m_sortButtons[0]->text() == QString::fromUtf8("↑") && w.m_sortButtons[1]->text().isEmpty()
+                && w.m_sortButtons[2]->text().isEmpty(), "only active sort arrow is shown");
+        require(w.m_pageLabel->font().family() == clock->font().family()
+                && w.m_countLabel->font().family() == clock->font().family(), "footer uses status Avenir family");
         const QStringList iconNames = QStringList() << QString::fromUtf8("Домашняя папка")
             << QString::fromUtf8("Открыть корзину") << QString::fromUtf8("Поиск") << QString::fromUtf8("Настройки");
         for (const QString &name : iconNames) {
@@ -274,7 +281,25 @@ public:
         touch(w, QEvent::TouchBegin, sortTap); touch(w, QEvent::TouchEnd, sortTap); QApplication::processEvents();
         require(w.m_sort == SortDate && w.m_sortAscending && w.m_sortButtons[1]->text().contains(QString::fromUtf8("↑")), "touch sorts by date");
         w.m_sortButtons[1]->click(); require(!w.m_sortAscending && w.m_sortButtons[1]->text().contains(QString::fromUtf8("↓")), "sort direction reversed");
+        QStringList previousDirs;
+        for (int i = 0; i < w.m_list->topLevelItemCount(); ++i) {
+            QTreeWidgetItem *item = w.m_list->topLevelItem(i);
+            if (item->data(0, ROLE_DIR).toBool() && !item->data(0, ROLE_PARENT).toBool())
+                previousDirs << item->data(0, ROLE_PATH).toString();
+        }
         w.m_sortButtons[2]->click(); require(w.m_sort == SortSize && w.m_sortAscending, "size column sorts");
+        for (int direction = 0; direction < 2; ++direction) {
+            QStringList dirs;
+            for (int i = 0; i < w.m_list->topLevelItemCount(); ++i) {
+                QTreeWidgetItem *item = w.m_list->topLevelItem(i);
+                if (item->data(0, ROLE_DIR).toBool() && !item->data(0, ROLE_PARENT).toBool()) {
+                    dirs << item->data(0, ROLE_PATH).toString();
+                    require(item->data(0, ROLE_SIZE).toString().isEmpty(), "directory size blank");
+                }
+            }
+            require(dirs == previousDirs, "size sort preserves displayed directory order in both directions");
+            w.m_sortButtons[2]->click();
+        }
         w.m_sortButtons[0]->click(); require(w.m_sort == SortName && w.m_sortAscending, "name column sorts");
         w.m_menuRequested = true; w.updateActions();
         bool mkdirShown = false;
@@ -292,23 +317,29 @@ public:
         }
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
-        require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");
-        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
+        require(w.m_actions->topLevelItemCount() >= 9, "folder actions shown");
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActMkdir
             && !(w.m_actions->topLevelItem(1)->flags() & Qt::ItemIsEnabled)
-            && w.m_actions->topLevelItem(2)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut
-            && w.m_actions->topLevelItem(3)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCopy
-            && !(w.m_actions->topLevelItem(4)->flags() & Qt::ItemIsEnabled)
-            && w.m_actions->topLevelItem(5)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActZip,
-            "home action is first and separated from cut");
+            && w.m_actions->topLevelItem(2)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
+            && !(w.m_actions->topLevelItem(3)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut
+            && w.m_actions->topLevelItem(5)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCopy
+            && !(w.m_actions->topLevelItem(6)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(7)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActZip,
+            "create folder first, then home and selected actions");
         w.m_clip = QStringList() << (w.m_root + "/.adds/archive-source"); w.updateActions();
-        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
-            && !(w.m_actions->topLevelItem(1)->flags() & Qt::ItemIsEnabled)
-            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActPaste
-            && !(w.m_actions->topLevelItem(5)->flags() & Qt::ItemIsEnabled),
-            "home remains first with clipboard");
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActMkdir
+            && w.m_actions->topLevelItem(6)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActPaste
+            && !(w.m_actions->topLevelItem(7)->flags() & Qt::ItemIsEnabled),
+            "create folder remains first with clipboard");
         w.m_marked.insert(w.m_root + "/.adds/archive-source"); w.updateActions();
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActMkdir
+            && w.m_actions->topLevelItem(2)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut,
+            "create folder remains first for multiple selections");
+        w.m_path = w.m_root + "/.adds"; w.updateActions();
         require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut,
-            "no home or extra leading separator for multiple selections");
+            "protected current directory does not offer create folder");
+        w.m_path = w.m_root;
         w.m_clip.clear(); w.clearSelection();
         testBrightness(w);
         testExtractAndLogging(w);
@@ -458,15 +489,15 @@ public:
             touch(w, QEvent::TouchBegin, point); touch(w, QEvent::TouchEnd, point);
             require(w.m_setVals[family] == w.m_fonts[1] && second->isSelected(), "touch selects font immediately");
             require(w.m_actions->font().family() == w.m_list->font().family()
-                    && w.m_actions->font().pixelSize() == w.m_list->font().pixelSize(), "font selection applies to menu");
+                    && w.m_actions->font().pixelSize() == ptToPx(12), "font family applies without changing menu size");
             require(!w.m_pickerShade->isVisible() && !w.m_confirm->isVisible(), "font choice opens no popup");
         }
         require(w.m_setLabels[font]->text().contains(QString::fromUtf8(" пт")), "font size includes points");
         first->click(); require(w.m_setVals[family].isEmpty() && first->isSelected(), "Kobo font applies immediately");
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
-        require(w.m_actions->font().pixelSize() == LIST_PX && w.m_actions->font().family() == w.m_list->font().family(),
-                "context menu updates with list size");
+        require(w.m_actions->font().pixelSize() == ptToPx(12) && w.m_actions->font().family() == w.m_list->font().family(),
+                "context menu size remains fixed as list size changes");
         reset->click(); no->click(); require(LIST_PX > beforeFont, "reset cancellation preserves setting");
         reset->click(); yes->click(); require(LIST_PX == ptToPx(8.5), "font reset applies immediately");
         require(QFileInfo(homeFile).exists(), "font reset preserves home");

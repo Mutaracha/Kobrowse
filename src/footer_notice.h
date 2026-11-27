@@ -7,14 +7,14 @@
 #include <QStringList>
 #include <QPushButton>
 
-// A stable, left-aligned two-column count display that remains a button.
+// A stable two-column count display with right-aligned labels.
 class FooterCountsButton : public QPushButton {
 public:
     explicit FooterCountsButton(QWidget *parent = nullptr) : QPushButton(parent) { setFocusPolicy(Qt::NoFocus); }
     void setCounterFont(const QFont &value) {
         setFont(value);
         const QFontMetrics fm(value);
-        labelWidth = qMax(fm.width(QString::fromUtf8("файлов:")), fm.width(QString::fromUtf8("папок:"))) + fm.width(QLatin1Char(' '));
+        labelWidth = qMax(fm.width(QString::fromUtf8("файлов:")), fm.width(QString::fromUtf8("папок:")));
         int digitWidth = 0;
         for (char digit = '0'; digit <= '9'; ++digit) digitWidth = qMax(digitWidth, fm.width(QLatin1Char(digit)));
         digitColumnWidth = digitWidth;
@@ -24,7 +24,7 @@ public:
         if (fileCount == files && folderCount == folders) return;
         fileCount = files; folderCount = folders; updateWidth(); update();
     }
-    QSize sizeHint() const override { return QSize(width(), QFontMetrics(font()).lineSpacing() * 2 + 8); }
+    QSize sizeHint() const override { return QSize(width(), QFontMetrics(font()).lineSpacing() * 2 + 2); }
     QSize minimumSizeHint() const override { return sizeHint(); }
 protected:
     void paintEvent(QPaintEvent *) override {
@@ -33,15 +33,16 @@ protected:
         p.setPen(isDown() ? Qt::white : Qt::black);
         const int line = QFontMetrics(font()).lineSpacing();
         const int top = (height() - 2 * line) / 2;
-        p.drawText(QRect(0, top, labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::fromUtf8("файлов:"));
-        p.drawText(QRect(0, top + line, labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::fromUtf8("папок:"));
-        p.drawText(QRect(labelWidth, top, width() - labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(fileCount));
-        p.drawText(QRect(labelWidth, top + line, width() - labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(folderCount));
+        p.drawText(QRect(0, top, labelWidth, line), Qt::AlignRight | Qt::AlignVCenter, QString::fromUtf8("файлов:"));
+        p.drawText(QRect(0, top + line, labelWidth, line), Qt::AlignRight | Qt::AlignVCenter, QString::fromUtf8("папок:"));
+        const int space = QFontMetrics(font()).width(QLatin1Char(' '));
+        p.drawText(QRect(labelWidth + space, top, width() - labelWidth - space, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(fileCount));
+        p.drawText(QRect(labelWidth + space, top + line, width() - labelWidth - space, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(folderCount));
     }
 private:
     void updateWidth() {
         const int digits = qMax(3, qMax(QString::number(qMax(0, fileCount)).size(), QString::number(qMax(0, folderCount)).size()));
-        setFixedWidth(labelWidth + digits * digitColumnWidth + 2);
+        setFixedWidth(labelWidth + QFontMetrics(font()).width(QLatin1Char(' ')) + digits * digitColumnWidth + 2);
     }
     int labelWidth = 0, digitColumnWidth = 0, fileCount = -1, folderCount = -1;
 };

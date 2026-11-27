@@ -52,6 +52,7 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this); p.scale(width() / 32.0, height() / 20.0);
+        p.translate(32, 0); p.scale(-1, 1); // Mirror the terminal and charge fill together.
         p.setPen(QPen(Qt::black, 1.5)); p.setBrush(Qt::white);
         p.drawRect(QRectF(1, 3, 26, 14)); p.fillRect(QRectF(28, 7, 3, 6), Qt::black);
         if (status.percent >= 0) p.fillRect(QRectF(3, 5, 22.0 * status.percent / 100, 10), Qt::black);
@@ -103,6 +104,8 @@ public:
     void setScale(qreal scale) {
         m_icon->setScale(scale);
         layout()->setSpacing(qMax(2, qRound(5 * scale)));
+        // The outer window already supplies one unit of margin.
+        layout()->setContentsMargins(qRound(32 * scale), 0, qRound(32 * scale), 0);
     }
     void refresh() {
         const QString now = QTime::currentTime().toString(QLatin1String("H:mm"));

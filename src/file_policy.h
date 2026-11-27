@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QSet>
+#include <QHash>
 #include <QString>
 #include <algorithm>
 #include <dirent.h>
@@ -51,9 +52,18 @@ inline QFileInfoList completeBrowserEntries(const QDir &dir, const QFileInfoList
 
 // Directories stay above files in both directions; ties are deterministic.
 enum BrowserSort { SortName, SortDate, SortSize };
-inline void sortBrowserEntries(QFileInfoList &entries, BrowserSort sort, bool ascending) {
-    std::stable_sort(entries.begin(), entries.end(), [sort, ascending](const QFileInfo &a, const QFileInfo &b) {
+inline void sortBrowserEntries(QFileInfoList &entries, BrowserSort sort, bool ascending,
+                               const QStringList &directoryOrder = QStringList()) {
+    QHash<QString, int> order;
+    for (int i = 0; i < directoryOrder.size(); ++i) order.insert(directoryOrder[i], i);
+    std::stable_sort(entries.begin(), entries.end(), [sort, ascending, order](const QFileInfo &a, const QFileInfo &b) {
         if (a.isDir() != b.isDir()) return a.isDir();
+        if (sort == SortSize && a.isDir()) {
+            const int ai = order.value(a.absoluteFilePath(), order.size());
+            const int bi = order.value(b.absoluteFilePath(), order.size());
+            if (ai != bi) return ai < bi;
+            return browserEntryLess(a, b);
+        }
         int cmp = 0;
         if (sort == SortDate) {
             const QDateTime aa = a.lastModified(), bb = b.lastModified();

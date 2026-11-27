@@ -354,6 +354,22 @@ static qreal layoutText(const QString &text, const QFont &f, qreal width,
     return y;
 }
 
+// Share exact pixel boundaries between header hit areas and painted rows.
+struct BrowserColumns { int name, date, size; };
+static BrowserColumns browserColumns(int width, const QFont &listFont) {
+    QFont detail = listFont; detail.setPixelSize(qMax(10, listFont.pixelSize() * 3 / 4));
+    const QFontMetrics fm(detail);
+    int date = fm.width(u8("88.88.88")) + 12;
+    int size = fm.width(u8("888.8 МБ")) + 12;
+    const int budget = qMax(2, width - qMax(qMax(32, ICON_PX * 2) + 24, width / 3));
+    if (date + size > budget) {
+        date = qMax(1, budget * date / (date + size));
+        size = qMax(1, budget - date);
+    }
+    BrowserColumns result = { qMax(1, width - date - size), date, size };
+    return result;
+}
+
 // Контрастные пиктограммы и двухстрочные сведения удобны на e-ink.
 class RowDelegate : public QStyledItemDelegate {
 public:
@@ -468,8 +484,9 @@ public:
         const QPointF pos(opt.rect.left() + PAD_H * 2 + sz, opt.rect.top() + PAD_V);
         p->setClipRect(opt.rect);
         layoutText(displayedName(idx), fontFor(idx), textWidth(), p, pos);
-        const int dateLeft = opt.rect.left() + opt.rect.width() * 54 / 100;
-        const int sizeLeft = opt.rect.left() + opt.rect.width() * 81 / 100;
+        const BrowserColumns columns = browserColumns(opt.rect.width(), m_font);
+        const int dateLeft = opt.rect.left() + columns.name;
+        const int sizeLeft = dateLeft + columns.date;
         const QRect dateRect(dateLeft + 3, opt.rect.top() + PAD_V, qMax(1, sizeLeft - dateLeft - 6), opt.rect.height() - 2 * PAD_V);
         const QRect sizeRect(sizeLeft + 3, opt.rect.top() + PAD_V, qMax(1, opt.rect.right() - sizeLeft - 6), opt.rect.height() - 2 * PAD_V);
         QFont dateFont = detailFont();
@@ -505,11 +522,32 @@ private:
     qreal textWidth() const {
         const QAbstractScrollArea *area = qobject_cast<const QAbstractScrollArea *>(m_view);
         const int width = area ? area->viewport()->width() : m_view->width();
-        return qMax(1, width * 54 / 100 - iconSize() - 3 * PAD_H);
+        return qMax(1, browserColumns(width, m_font).name - iconSize() - 3 * PAD_H);
     }
     QWidget *m_view;
     QFont m_font;
     int m_maxHeight = 0;
+};
+
+class BrowserColumnHeader : public QWidget {
+public:
+    BrowserColumnHeader(QWidget *parent, const QFont &listFont) : QWidget(parent), m_listFont(listFont) {
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        m_layout = new QHBoxLayout(this); m_layout->setContentsMargins(0, 0, 0, 0); m_layout->setSpacing(0);
+    }
+    void addColumn(QPushButton *button) { m_columns << button; m_layout->addWidget(button); }
+    void setListFont(const QFont &font) { m_listFont = font; applyWidths(); }
+protected:
+    void resizeEvent(QResizeEvent *event) override { QWidget::resizeEvent(event); applyWidths(); }
+private:
+    void applyWidths() {
+        if (m_columns.size() != 3 || width() <= 1) return;
+        const BrowserColumns c = browserColumns(width(), m_listFont);
+        m_columns[0]->setFixedWidth(c.name); m_columns[1]->setFixedWidth(c.date); m_columns[2]->setFixedWidth(c.size);
+    }
+    QFont m_listFont;
+    QHBoxLayout *m_layout;
+    QVector<QPushButton *> m_columns;
 };
 
 // Рубленый шрифт Kobo для кнопок: Kobo Nickel (шрифт интерфейса), затем Avenir, иначе любой sans
@@ -542,15 +580,17 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
     p->setBrush(Qt::NoBrush);
     switch (ic) {
     case I_BACK:
+        p->setPen(QPen(c, 1.1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p->drawLine(QPointF(20, 12), QPointF(4, 12));
         p->drawLine(QPointF(4, 12), QPointF(10, 6));
         p->drawLine(QPointF(4, 12), QPointF(10, 18));
         break;
-    case I_HOME: {
-        QPolygonF roof; roof << QPointF(3, 11) << QPointF(12, 3) << QPointF(21, 11);
-        p->drawPolyline(roof);
-        p->drawRect(QRectF(6, 10, 12, 11));
-        p->drawRect(QRectF(10, 15, 4, 6));
+    case I_HOME: { // Continuous roof and walls, open doorway like the reference.
+        p->setPen(QPen(c, 1.15, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath house; house.moveTo(1.8, 11); house.lineTo(12, 1.8); house.lineTo(22.2, 11);
+        house.lineTo(20, 11); house.lineTo(20, 22); house.lineTo(14, 22);
+        house.lineTo(14, 15.5); house.lineTo(10, 15.5); house.lineTo(10, 22);
+        house.lineTo(4, 22); house.lineTo(4, 11); house.closeSubpath(); p->drawPath(house);
         break;
     }
     case I_SEARCH:
@@ -574,14 +614,17 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         p->drawLine(QPointF(9, 15.6), QPointF(17, 4));
         p->drawLine(QPointF(15, 15.6), QPointF(7, 4));
         break;
-    case I_TRASH: {                    // корзина
-        p->drawLine(QPointF(4, 7), QPointF(20, 7));
-        QPolygonF lid;  lid << QPointF(9, 7) << QPointF(9, 4) << QPointF(15, 4) << QPointF(15, 7);
-        p->drawPolyline(lid);
-        QPolygonF body; body << QPointF(6, 7) << QPointF(7, 20) << QPointF(17, 20) << QPointF(18, 7);
-        p->drawPolyline(body);
-        p->drawLine(QPointF(10, 11), QPointF(10, 16));
-        p->drawLine(QPointF(14, 11), QPointF(14, 16));
+    case I_TRASH: { // Lid, handle and three vertical bars.
+        p->setPen(QPen(c, 1.05, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p->drawRect(QRectF(2.8, 6.4, 18.4, 1.5));
+        QPainterPath handle; handle.moveTo(9, 6.3); handle.lineTo(9, 4.9);
+        handle.quadTo(9, 3.8, 10.2, 3.8); handle.lineTo(13.8, 3.8);
+        handle.quadTo(15, 3.8, 15, 4.9); handle.lineTo(15, 6.3); p->drawPath(handle);
+        QPainterPath body; body.moveTo(4.2, 8); body.lineTo(5.6, 21);
+        body.lineTo(18.4, 21); body.lineTo(19.8, 8); p->drawPath(body);
+        p->drawLine(QPointF(8.0, 10.1), QPointF(8.4, 19));
+        p->drawLine(QPointF(12, 10.1), QPointF(12, 19));
+        p->drawLine(QPointF(16.0, 10.1), QPointF(15.6, 19));
         break;
     }
     case I_INFO:                       // «i» в круге
@@ -605,14 +648,13 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         p->drawPolyline(a);
         break;
     }
-    case I_CHEV_UP: {
-        QPolygonF a; a << QPointF(3, 18) << QPointF(12, 6) << QPointF(21, 18);
-        p->setPen(Qt::NoPen); p->setBrush(c); p->drawPolygon(a);
-        break;
-    }
-    case I_CHEV_DOWN: {
-        QPolygonF a; a << QPointF(3, 7) << QPointF(12, 19) << QPointF(21, 7);
-        p->setPen(Qt::NoPen); p->setBrush(c); p->drawPolygon(a);
+    case I_CHEV_UP:
+    case I_CHEV_DOWN: { // Broad chevron, not a solid triangle.
+        QPolygonF shape;
+        shape << QPointF(1.5, 5) << QPointF(7.0, 5) << QPointF(12, 11.0)
+              << QPointF(17.0, 5) << QPointF(22.5, 5) << QPointF(12, 19);
+        if (ic == I_CHEV_UP) for (int i = 0; i < shape.size(); ++i) shape[i].setY(24 - shape[i].y());
+        p->setPen(Qt::NoPen); p->setBrush(c); p->drawPolygon(shape);
         break;
     }
     case I_EYE:
@@ -630,15 +672,29 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         p->drawLine(QPointF(6, 6), QPointF(18, 18));
         p->drawLine(QPointF(18, 6), QPointF(6, 18));
         break;
-    case I_GEAR:                       // шестерёнка: кольцо + 8 зубцов
-        p->drawEllipse(QPointF(12, 12), 3, 3);
-        p->drawEllipse(QPointF(12, 12), 6.5, 6.5);
+    case I_GEAR: { // Rounded eight-tooth outline and a single large inner circle.
+        QVector<QPointF> points;
+        const qreal pi = 3.141592653589793;
         for (int i = 0; i < 8; ++i) {
-            const qreal a = i * 3.14159265 / 4;
-            p->drawLine(QPointF(12 + 6.5 * qCos(a), 12 + 6.5 * qSin(a)),
-                        QPointF(12 + 9.5 * qCos(a), 12 + 9.5 * qSin(a)));
+            const qreal center = -pi / 2 + i * pi / 4;
+            const qreal offsets[] = { -.34, -.22, .22, .34 };
+            const qreal radii[] = { 8.0, 10.5, 10.5, 8.0 };
+            for (int j = 0; j < 4; ++j)
+                points << QPointF(12 + radii[j] * qCos(center + offsets[j]), 12 + radii[j] * qSin(center + offsets[j]));
         }
+        QPainterPath gear;
+        for (int i = 0; i < points.size(); ++i) {
+            const QPointF prev = points[(i + points.size() - 1) % points.size()];
+            const QPointF cur = points[i], next = points[(i + 1) % points.size()];
+            const QPointF start = cur * .7 + prev * .3, end = cur * .7 + next * .3;
+            if (i == 0) gear.moveTo(start); else gear.lineTo(start);
+            gear.quadTo(cur, end);
+        }
+        gear.closeSubpath();
+        p->setPen(QPen(c, 1.05, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p->drawPath(gear); p->drawEllipse(QPointF(12, 12), 4.5, 4.5);
         break;
+    }
     case I_CLIPBOARD:
     case I_CLIPBOARD_X:                // планшет; с крестиком — очистить
         p->drawRoundedRect(QRectF(5, 5, 14, 16), 1.5, 1.5);
@@ -2053,8 +2109,8 @@ public:
 
         m_toolbar = new QWidget(this);
         QHBoxLayout *toolbar = new QHBoxLayout(m_toolbar);
-        toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(qMax(6, GAP * 3 / 2));
-        ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar, true);
+        toolbar->setContentsMargins(0, 0, GAP, 0); toolbar->setSpacing(qMax(6, qRound(GAP * 2.25)));
+        ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar);
         QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(8 * SCREEN_DPI / 72.0)));
         back->setFont(backFont); back->setIconScale(1.5);
         back->setMinimumHeight(qMax(48, qRound(72 * SCREEN_DPI / 300.0)));
@@ -2090,30 +2146,32 @@ public:
         lay->addWidget(m_toolbar);
 
         // Текущий путь остаётся видимым при прокрутке списка.
-        m_pathLabel = new BrowserPathLabel(this);
+        m_pathHeader = new QWidget(this);
+        QVBoxLayout *pathAndHeader = new QVBoxLayout(m_pathHeader);
+        pathAndHeader->setContentsMargins(0, 0, 0, 0); pathAndHeader->setSpacing(0);
+        m_pathLabel = new BrowserPathLabel(m_pathHeader);
         QFont pathFont = fMsg; pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1)));
         m_pathLabel->setFont(pathFont);
         m_pathLabel->setWordWrap(false);
         m_pathLabel->setTextFormat(Qt::PlainText);
         m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:6px;"));
-        lay->addWidget(m_pathLabel);
+        pathAndHeader->addWidget(m_pathLabel);
 
-        // The header and the delegate use matching 54/27/19 column widths.
-        m_columnHeader = new QWidget(this);
-        QHBoxLayout *columns = new QHBoxLayout(m_columnHeader);
-        columns->setContentsMargins(0, 0, 0, 0); columns->setSpacing(0);
-        const char *columnLabels[] = { "Название", "Дата", "Размер" };
-        const int widths[] = { 54, 27, 19 };
+        // Unlabelled but fully tappable columns; show an arrow only on the active one.
+        m_columnHeader = new BrowserColumnHeader(m_pathHeader, fList);
         for (int n = 0; n < 3; ++n) {
-            QPushButton *button = new QPushButton(u8(columnLabels[n]), m_columnHeader);
+            QPushButton *button = new QPushButton(m_columnHeader);
+            const char *names[] = { "Сортировать по имени", "Сортировать по дате", "Сортировать по размеру" };
+            button->setAccessibleName(u8(names[n]));
             button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(statusFont);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
             button->setMinimumHeight(qMax(48, QFontMetrics(statusFont).lineSpacing() + 12));
             button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;} QPushButton:pressed{background:black;color:white;}"));
-            m_sortButtons << button; columns->addWidget(button, widths[n]);
+            m_sortButtons << button; m_columnHeader->addColumn(button);
             connect(button, &QPushButton::clicked, [this, n]() { setSort(static_cast<BrowserSort>(n)); });
         }
-        updateSortHeader(); lay->addWidget(m_columnHeader);
+        updateSortHeader(); pathAndHeader->addWidget(m_columnHeader);
+        lay->addWidget(m_pathHeader);
 
         // Список файлов и папок
         m_list = new QTreeWidget(this);
@@ -2193,14 +2251,15 @@ public:
         m_actions->setHeaderHidden(true);
         m_actions->setRootIsDecorated(false);
         m_actions->setIndentation(0);
-        m_actions->setFont(fList);
+        QFont actionFont = fList; actionFont.setPixelSize(ptToPx(12));
+        m_actions->setFont(actionFont);
         m_actions->setFocusPolicy(Qt::NoFocus);
         m_actions->setSelectionMode(QAbstractItemView::NoSelection);
         m_actions->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_actions->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_actions->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         m_actions->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
-                                   "QTreeWidget::item{padding-left:12px;}"));
+                                   "QTreeWidget::item{padding-left:12px;padding-right:12px;}"));
         m_actions->setItemDelegate(new ActionMenuDelegate(m_actions));
         m_actions->hide();
         m_pickerShade = new QWidget(this);
@@ -2280,23 +2339,24 @@ public:
         m_footerLine = new QFrame(this); m_footerLine->setFrameShape(QFrame::HLine); lay->addWidget(m_footerLine);
         m_nav = new QWidget(this);
         QHBoxLayout *footer = new QHBoxLayout(m_nav);
-        footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(qMax(6, GAP * 3 / 2));
+        footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(qMax(6, qRound(GAP * 2.25)));
         m_prev = new ChromeButton(I_CHEV_UP, QString(), m_nav);
         m_next = new ChromeButton(I_CHEV_DOWN, QString(), m_nav);
         m_prev->setAccessibleName(u8("Предыдущая страница"));
         m_next->setAccessibleName(u8("Следующая страница"));
-        const int footerHeight = qMax(qMax(40, chromeHeight * 3 / 4), QFontMetrics(fMsg).lineSpacing() * 2 + 4);
-        m_prev->setFixedSize(footerHeight, footerHeight); m_next->setFixedSize(footerHeight, footerHeight);
+        QFont footerFont = statusFont; footerFont.setPixelSize(FONT_MSG);
+        const int footerHeight = qMax(chromeHeight, QFontMetrics(footerFont).lineSpacing() * 2);
+        m_prev->setFixedSize(chromeHeight, chromeHeight); m_next->setFixedSize(chromeHeight, chromeHeight);
+        m_prev->setLargePlainIcon(true); m_next->setLargePlainIcon(true);
         footer->addWidget(m_prev, 0, Qt::AlignVCenter); footer->addWidget(m_next, 0, Qt::AlignVCenter);
         m_pageLabel = new QLabel(m_nav);
-        QFont pageNumberFont = fMsg; pageNumberFont.setFamily(u8("Monospace")); pageNumberFont.setStyleHint(QFont::Monospace);
-        m_pageLabel->setFont(pageNumberFont);
+        m_pageLabel->setFont(footerFont);
         m_pageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         footer->addWidget(m_pageLabel);
         m_footerNotice = new FooterNotice(m_nav); m_footerNotice->setFont(fMsg);
         m_footerNotice->setFixedHeight(footerHeight);
         footer->addWidget(m_footerNotice, 1);
-        m_countLabel = new FooterCountsButton(m_nav); m_countLabel->setCounterFont(fMsg);
+        m_countLabel = new FooterCountsButton(m_nav); m_countLabel->setCounterFont(footerFont);
         m_countLabel->setMinimumHeight(footerHeight);
         m_countLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
         m_nav->setMinimumHeight(footerHeight);
@@ -2785,6 +2845,9 @@ private:
         const int separator = qMax(5, GAP / 2);
         QList<ActionMenuEntry> entries;
         const bool selected = !m_marked.isEmpty();
+        if (safeLocalPath(m_root, m_path) && writableLocalDirectory(m_root, m_path, ALLOW_ADDS))
+            entries << ActionMenuEntry(u8("Создать папку"), ActMkdir, row)
+                    << ActionMenuEntry(QString(), 0, separator, false);
         if (selected) {
             if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
                 entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row)
@@ -2799,10 +2862,8 @@ private:
                     << ActionMenuEntry(u8("Удалить"), ActDelete, row);
             if (m_marked.size() == 1) entries << ActionMenuEntry(u8("Переименовать"), ActRename, row);
         }
-        if (safeLocalPath(m_root, m_path) && writableLocalDirectory(m_root, m_path, ALLOW_ADDS))
-            entries << ActionMenuEntry(u8("Создать папку"), ActMkdir, row);
-        entries << ActionMenuEntry(QString(), 0, separator, false)
-                << ActionMenuEntry(u8("Закрыть меню"), ActClose, row);
+        if (!entries.isEmpty() && entries.last().enabled) entries << ActionMenuEntry(QString(), 0, separator, false);
+        entries << ActionMenuEntry(u8("Закрыть меню"), ActClose, row);
         const bool changed = syncActionMenu(m_actions, entries);
         if (changed || !m_actions->isVisible()) placeActionMenu();
         if (!m_actions->isVisible()) { m_actions->show(); m_actions->raise(); }
@@ -3097,11 +3158,18 @@ private:
     }
 
     void updateSortHeader() {
-        const char *labels[] = { "Название", "Дата", "Размер" };
         for (int n = 0; n < m_sortButtons.size(); ++n)
-            m_sortButtons[n]->setText(u8(labels[n]) + (n == int(m_sort) ? (m_sortAscending ? u8(" ↑") : u8(" ↓")) : QString()));
+            m_sortButtons[n]->setText(n == int(m_sort) ? (m_sortAscending ? u8("↑") : u8("↓")) : QString());
     }
     void setSort(BrowserSort column) {
+        if (column == SortSize && m_sort != SortSize) {
+            m_directoryOrder.clear(); m_directoryOrderPath = m_path;
+            for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
+                QTreeWidgetItem *item = m_list->topLevelItem(i);
+                if (item->data(0, ROLE_DIR).toBool() && !item->data(0, ROLE_PARENT).toBool())
+                    m_directoryOrder << item->data(0, ROLE_PATH).toString();
+            }
+        }
         if (column == m_sort) m_sortAscending = !m_sortAscending;
         else { m_sort = column; m_sortAscending = true; }
         updateSortHeader(); load();
@@ -3127,7 +3195,8 @@ private:
         // дескрипторы на /mnt/onboard не удерживаются (важно для USB-режима)
         const QFileInfoList qtEntries = browserQtEntries(dir, m_showHidden);
         QFileInfoList entries = completeBrowserEntries(dir, qtEntries, m_showHidden);
-        sortBrowserEntries(entries, m_sort, m_sortAscending);
+        if (m_directoryOrderPath != m_path) { m_directoryOrder.clear(); m_directoryOrderPath = m_path; }
+        sortBrowserEntries(entries, m_sort, m_sortAscending, m_directoryOrder);
         if (m_path == m_root && !m_rootDiagLogged) {
             m_rootDiagLogged = true;
             bool qtAdds = false, qtDisabled = false, shownAdds = false, shownDisabled = false;
@@ -3179,7 +3248,7 @@ private:
             if (readOnly) detail += u8("  ·  защищено");
             it->setData(0, ROLE_DETAIL, detail);
             it->setData(0, ROLE_DATE, fi.lastModified().toString(u8("dd.MM.yy\nhh:mm")));
-            it->setData(0, ROLE_SIZE, isDir || fi.isSymLink() ? u8("—") : humanSize(fi.size()));
+            it->setData(0, ROLE_SIZE, isDir ? QString() : fi.isSymLink() ? u8("—") : humanSize(fi.size()));
             it->setData(0, ROLE_PATH, path);
             it->setData(0, ROLE_DIR, isDir);
             it->setData(0, ROLE_READONLY, readOnly);
@@ -3622,8 +3691,7 @@ private:
             setSettingsTab(false);
         }
         m_list->setVisible(!on);
-        m_columnHeader->setVisible(!on);
-        m_pathLabel->setVisible(!on);
+        m_pathHeader->setVisible(!on);
         m_nav->setVisible(!on);
         m_toolbar->setVisible(!on);
         m_footerLine->setVisible(!on);
@@ -3751,7 +3819,9 @@ private:
         QFont listFont = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT);
         listFont.setPixelSize(LIST_PX);
         m_list->setFont(listFont); m_fileDelegate->setListFont(listFont);
-        m_actions->setFont(listFont);
+        m_columnHeader->setListFont(listFont);
+        QFont actionFont = listFont; actionFont.setPixelSize(ptToPx(12));
+        m_actions->setFont(actionFont);
         m_resetHomeDraft = false; updateHomeDraft();
         clearSelection(); load();
         klog(u8("settings applied"));
@@ -3807,8 +3877,11 @@ private:
     QStringList   m_clip;            // буфер: пути для вставки
     bool          m_clipCut = false; // буфер «вырезан» (перенос) или «скопирован»
     QTreeWidget  *m_list = nullptr;
-    QWidget *m_columnHeader = nullptr;
+    QWidget *m_pathHeader = nullptr;
+    BrowserColumnHeader *m_columnHeader = nullptr;
     QVector<QPushButton *> m_sortButtons;
+    QStringList m_directoryOrder;
+    QString m_directoryOrderPath;
     BrowserSort m_sort = SortName;
     bool m_sortAscending = true;
     QLabel       *m_info = nullptr;
