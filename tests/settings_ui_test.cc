@@ -256,6 +256,14 @@ public:
         require(w.m_sliders[font] && w.m_minusBtns[font] && w.m_plusBtns[font], "font slider has buttons");
         for (int screenWidth : {600, 768, 1180}) {
             w.resize(screenWidth, 1024); QApplication::processEvents();
+            if (w.m_settingsScroll->horizontalScrollBar()->maximum() != 0) {
+                QTextStream(stderr) << "FAIL: settings overflow screen=" << screenWidth << " viewport="
+                    << w.m_settingsScroll->viewport()->width() << " content=" << w.m_settingsScroll->widget()->width()
+                    << " minimum=" << w.m_settingsScroll->widget()->minimumSizeHint().width() << '\n';
+                for (int g = 0; g < GroupCount; ++g)
+                    if (w.m_groupBlocks[g]->isVisible()) QTextStream(stderr) << "FAIL: group=" << g << " minimum="
+                        << w.m_groupBlocks[g]->minimumSizeHint().width() << '\n';
+            }
             require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings never overflow horizontally");
             const QLabel *rangeLow = w.findChild<QLabel *>(QString("rangeLow_%1").arg(hold));
             const QLabel *rangeHigh = w.findChild<QLabel *>(QString("rangeHigh_%1").arg(hold));

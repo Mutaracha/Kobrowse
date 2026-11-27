@@ -3174,7 +3174,8 @@ private:
                 QHBoxLayout *r = new QHBoxLayout();
                 r->setContentsMargins(0, 0, 0, 0); r->setSpacing(qMax(4, qRound(10 * sc)));
                 QLabel *name = new QLabel(u8(SET_ITEMS[i].label), line);
-                name->setFont(fText); name->setWordWrap(true);
+                name->setFont(fText); name->setWordWrap(true); name->setMinimumWidth(0);
+                name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
                 if (isFontSizeSetting(u8(SET_ITEMS[i].key))) {
                     QVBoxLayout *stack = new QVBoxLayout(line);
                     stack->setContentsMargins(0, 0, 0, 0); stack->setSpacing(qMax(4, qRound(8 * sc)));
@@ -3189,6 +3190,7 @@ private:
                         : key == u8("logging_enabled") ? u8("Журнал может содержать пути и имена файлов.") : QString();
                     if (!hint.isEmpty()) {
                         QLabel *description = new QLabel(hint, line); description->setWordWrap(true);
+                        description->setMinimumWidth(0); description->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
                         QFont descriptionFont = fText; descriptionFont.setPixelSize(qMax(12, fText.pixelSize() * 3 / 4));
                         description->setFont(descriptionFont); textColumn->addWidget(description);
                     }
