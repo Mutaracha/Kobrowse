@@ -96,7 +96,7 @@ static QString u8(const char *s) { return QString::fromUtf8(s); }
 
 // ---------- внешний вид: значения из kobrowse.ini (пересчитаны в пиксели) ----------
 // Заполняются loadConfig() при каждом открытии менеджера.
-static int     LIST_PX, FONT_BTN, FONT_MSG, GAP, BTN_MARGIN, BTN_HEIGHT, ICON_PX, LONG_TAP_MS, IDLE_MS;
+static int     LIST_PX, FONT_BTN, FONT_MSG, GAP, BTN_MARGIN, BTN_HEIGHT, ICON_PX, LONG_TAP_MS;
 static qreal   BTN_RADIUS, BTN_PEN;
 static QString LIST_FONT, BTN_FONT;
 // Клавиатура поиска (перенесена из ksearch): 0 — кегль считается от высоты клавиши.
@@ -115,7 +115,6 @@ static const CfgKey CFG_KEYS[] = {
     { "list_pt",       "8",           "кегль списка файлов, пт: 8 = петит, 9 = боргес, 10 = корпус (можно дробное: 8.5)" },
     { "list_font",     "",            "гарнитура списка; пусто — как в Nickel. Примеры: Georgia, Amasis, Kobo Nickel" },
     { "long_tap_ms",   "500",         "долгое нажатие (выбор строки), мс" },
-    { "idle_min",      "2",           "закрыть менеджер, если не было касаний, мин" },
     { "allow_adds_edit", "0",       "разрешить изменение содержимого .adds: 1 — да, 0 — только просмотр" },
     { "trash_enabled", "1",           "использовать корзину: 1 — да, 0 — удалять после подтверждения" },
     { "logging_enabled", "1",          "журнал отладки Kobrowse: 1 — вести, 0 — выключить" },
@@ -169,6 +168,48 @@ static void loadConfig() {
         } else if (QFileInfo(ini).exists() || QFileInfo(ini).isSymLink()) canUpdate = false;
     }
     QStringList lines = text.split(QLatin1Char('\n'));
+    const char *obsolete[] = { "btn_pt", "btn_font", "info_pt", "gap_pt", "btn_pad_pt",
+        "btn_height_pt", "icon_pt", "btn_radius_pt", "btn_line_pt", "scale_pct", "idle_min",
+        "key_font_pt", "func_pt", "search_list_pt", "search_list_font", "opds_key_pt", "opds_func_pt" };
+    QSet<QString> oldKeys;
+    for (const char *key : obsolete) oldKeys.insert(u8(key));
+    // Remove only comments generated verbatim by older Kobrowse versions.
+    struct OldComment { const char *key, *text; };
+    const OldComment oldComments[] = {
+        { "btn_pt", "наибольший кегль подписей кнопок, пт (уменьшается, если слово не влезает)" },
+        { "btn_font", "гарнитура подписей кнопок" },
+        { "info_pt", "кегль сведений о файле и сообщений, пт" },
+        { "gap_pt", "поля от краёв экрана и промежутки между кнопками, пт" },
+        { "btn_pad_pt", "поле внутри кнопки слева и справа от подписи, пт" },
+        { "btn_height_pt", "высота кнопки, пт" },
+        { "icon_pt", "размер иконки на кнопке, пт" },
+        { "btn_radius_pt", "скругление углов кнопки, пт (0 — прямые углы)" },
+        { "btn_line_pt", "толщина рамки кнопки, пт" },
+        { "scale_pct", "общий масштаб интерфейса kobrowse, %: 100 — как на Clara HD (по ширине экрана); 50–200" },
+        { "idle_min", "закрыть менеджер, если не было касаний, мин" },
+        { "key_font_pt", "кегль подписей клавиш поиска, пт; 0 — от высоты клавиши (около 0.52)" },
+        { "func_pt", "кегль служебных клавиш поиска (Shift, Space, DelBwd), пт; 0 — от высоты клавиши (около 0.34)" },
+        { "search_list_pt", "кегль списка результатов поиска, пт (8 = петит, 10 = корпус; можно дробное: 8.5)" },
+        { "search_list_font", "гарнитура списка результатов поиска; пусто — шрифт виджета" },
+        { "opds_key_pt", "кегль клавиш OPDS-клавиатуры, пт (уменьшите, если клавиши не влезают)" },
+        { "opds_func_pt", "кегль нижнего ряда кнопок OPDS, пт" },
+    };
+    QHash<QString, QString> generatedComments;
+    for (const OldComment &entry : oldComments) generatedComments.insert(u8(entry.key), u8("; ") + u8(entry.text));
+    bool section = false, removedOld = false;
+    for (int i = 0; i < lines.size();) {
+        const QString line = lines.at(i).trimmed();
+        if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']'))) section = line == u8("[kobrowse]");
+        const int eq = line.indexOf(QLatin1Char('='));
+        const QString key = line.left(eq).trimmed();
+        if (section && eq > 0 && !line.startsWith(QLatin1Char(';')) && !line.startsWith(QLatin1Char('#'))
+            && oldKeys.contains(key)) {
+            lines.removeAt(i); removedOld = true;
+            if (i > 0 && lines.at(i - 1).trimmed() == generatedComments.value(key)) { lines.removeAt(i - 1); --i; }
+            continue;
+        }
+        ++i;
+    }
     QStringList present;
     bool inSection = false, hasSection = false;
     int insertAt = -1;
@@ -189,7 +230,7 @@ static void loadConfig() {
     for (const CfgKey &k : CFG_KEYS)
         if (!present.contains(u8(k.key)))
             added << QString() << (u8("; ") + u8(k.comment)) << (u8(k.key) + u8("=") + u8(k.def));
-    if (canUpdate && !added.isEmpty()) {
+    if (canUpdate && (removedOld || !added.isEmpty())) {
         if (insertAt < 0) insertAt = lines.size();
         for (const QString &line : added) lines.insert(insertAt++, line);
         QSaveFile f(ini);
@@ -213,7 +254,6 @@ static void loadConfig() {
     BTN_MARGIN = qRound(12 * uiScale); BTN_HEIGHT = qRound(72 * uiScale); ICON_PX = qRound(32 * uiScale);
     BTN_RADIUS = 0; BTN_PEN = qMax(1.0, 2 * uiScale);
     LONG_TAP_MS = int(num("long_tap_ms", 500, 150, 3000));
-    IDLE_MS = int(num("idle_min", 2, 0.5, 60) * 60000);
     KEY_FONT_SET = false; FUNC_FONT_SET = false;
     KEY_FONT_PX = 0; FUNC_PX = 0;
     SEARCH_LIST_PX = ptToPx(10); SEARCH_LIST_FONT.clear();
@@ -631,17 +671,6 @@ protected:
 //       — тот же путь, что и тап в библиотеке Nickel → проходит через Kobalt
 // this — «пустой» ReadingViewMixin: только указатель на его vtable (_ZTV16ReadingViewMixin + 8).
 template <typename T> static T nsym(const char *n) { return reinterpret_cast<T>(dlsym(RTLD_DEFAULT, n)); }
-
-// Pause the idle timeout during sleep; USB is handled separately.
-static void bindSleepTimer(QTimer *timer) {
-    typedef QObject *(*Manager)();
-    Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
-    QObject *manager = power ? power() : nullptr;
-    if (!manager) return;
-    QObject::connect(manager, SIGNAL(aboutToSleep()), timer, SLOT(stop()));
-    QObject::connect(manager, SIGNAL(resumingFromSleep()), timer, SLOT(start()));
-    QObject::connect(manager, SIGNAL(resumedFromSleep()), timer, SLOT(start()));
-}
 
 // Можно ли открывать книги на этой прошивке. Вызовы libnickel проверены только на 4.38: на другой версии
 // функции с теми же именами могут вести себя иначе, поэтому по умолчанию (auto) там открытие выключено.
@@ -1237,10 +1266,6 @@ public:
         m_msgTimer.setSingleShot(true); m_msgTimer.setInterval(5000);
         connect(&m_msgTimer, &QTimer::timeout, this, [this]() { m_msg->setMessage(QString()); });
 
-        m_idle.setSingleShot(true); m_idle.setInterval(IDLE_MS);
-        connect(&m_idle, &QTimer::timeout, this, [this]() { close(); });
-        m_idle.start();
-        bindSleepTimer(&m_idle);
         qApp->installEventFilter(this);
     }
     void startRename(const QString &name, const std::function<QString(const QString &)> &submit) {
@@ -1570,7 +1595,7 @@ private:
         const QPoint p = pts.isEmpty() ? QPoint() : mapFromGlobal(pts.first().screenPos().toPoint());
         switch (t) {
         case QEvent::TouchBegin: {
-            m_idle.start(); m_press.restart(); m_pressPos = p; m_moved = false; m_twoFinger = false;
+            m_press.restart(); m_pressPos = p; m_moved = false; m_twoFinger = false;
             m_longBtn = buttonAt(p); m_longFired = false; m_longTimer.stop();
             if (m_longBtn && hasLongAction(m_longBtn->property("role").toString())) m_longTimer.start();
             else m_longBtn = nullptr;
@@ -1655,7 +1680,7 @@ private:
     bool m_twoFinger = false;
     qreal m_twoStartY = 0;
     int m_scrollStart = 0;
-    QTimer m_idle, m_msgTimer;
+    QTimer m_msgTimer;
 };
 
 static void ksearch_open() {
@@ -1689,7 +1714,6 @@ static const SetItem SET_ITEMS[] = {
     { "list_pt",       "Кегль списка, пт",       S_NUM,  0.5, 4,   24,   1 },
     { "list_font",     "Гарнитура списка",       S_FONT, 0,   0,   0,    0 },
     { "long_tap_ms",   "Долгое нажатие, мс",     S_NUM,  50,  150, 3000, 0 },
-    { "idle_min",      "Автозакрытие, мин",      S_NUM,  0.5, 0.5, 60,   1 },
     { "allow_adds_edit", "Редактирование .adds", S_BOOL, 0, 0, 1, 0 },
     { "trash_enabled", "Корзина",                 S_BOOL, 0,   0,   1,    0 },
     { "logging_enabled", "Журнал отладки",         S_BOOL, 0,   0,   1,    0 },
@@ -1697,7 +1721,7 @@ static const SetItem SET_ITEMS[] = {
     { "open_books",    "Открытие книг",          S_OPEN, 0,   0,   0,    0 },
 };
 static const int SET_COUNT = int(sizeof(SET_ITEMS) / sizeof(SET_ITEMS[0]));
-static bool isFontSizeSetting(const QString &key) { return key == u8("list_pt"); }
+static bool isFontSizeSetting(const QString &key) { return key == u8("list_pt") || key == u8("long_tap_ms"); }
 // Записать значения в kobrowse.ini: строка «ключ=…» заменяется, комментарии сохраняются
 static bool saveConfig(const QStringList &keys, const QStringList &vals) {
     const QString ini = u8(KOBROWSE_INI);
@@ -1779,7 +1803,7 @@ public:
         const QStringList statusFamilies = QFontDatabase().families();
         for (const QString &family : statusFamilies)
             if (family.compare(u8("Avenir Next"), Qt::CaseInsensitive) == 0) { statusFont = QFont(family); break; }
-        statusFont.setPixelSize(qMax(12, qRound(28 * SCREEN_DPI / 300.0)));
+        statusFont.setPixelSize(qMax(12, qRound(26 * SCREEN_DPI / 300.0)));
         m_deviceStatus->setFont(statusFont);
         m_deviceStatus->setScale(SCREEN_DPI / 300.0);
         lay->addWidget(m_deviceStatus);
@@ -1789,13 +1813,13 @@ public:
         toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(GAP);
         ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar, true);
         QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(8 * SCREEN_DPI / 72.0)));
-        back->setFont(backFont); back->setMinimumHeight(qMax(48, BTN_HEIGHT / 2));
+        back->setFont(backFont); back->setMinimumHeight(qMax(48, qRound(72 * SCREEN_DPI / 300.0)));
         back->setFixedWidth(QFontMetrics(backFont).width(u8("Закрыть Kobrowse")) + ICON_PX + 36);
         toolbar->addWidget(back); toolbar->addStretch(1);
         ChromeButton *find = new ChromeButton(I_SEARCH, QString(), m_toolbar);
-        ChromeButton *settings = new ChromeButton(I_MORE, QString(), m_toolbar);
+        ChromeButton *settings = new ChromeButton(I_GEAR, QString(), m_toolbar);
         find->setAccessibleName(u8("Поиск")); settings->setAccessibleName(u8("Настройки"));
-        const int chromeHeight = qMax(48, BTN_HEIGHT / 2);
+        const int chromeHeight = qMax(48, qRound(72 * SCREEN_DPI / 300.0));
         find->setFixedSize(chromeHeight, chromeHeight); settings->setFixedSize(chromeHeight, chromeHeight);
         ChromeButton *home = new ChromeButton(I_HOME, QString(), m_toolbar);
         home->setAccessibleName(u8("Домашняя папка")); home->setFixedSize(chromeHeight, chromeHeight);
@@ -1815,7 +1839,7 @@ public:
 
         // Текущий путь остаётся видимым при прокрутке списка.
         m_pathLabel = new QLabel(this);
-        QFont pathFont = fMsg; pathFont.setPixelSize(qRound(FONT_MSG * 1.4));
+        QFont pathFont = fMsg; pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1)));
         m_pathLabel->setFont(pathFont);
         m_pathLabel->setWordWrap(true);
         m_pathLabel->setTextFormat(Qt::PlainText);
@@ -1906,7 +1930,9 @@ public:
         m_fontPicker->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_fontPicker->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         m_fontPicker->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
-                                      "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"));
+                                      "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"
+                                      "QTreeWidget::item:selected{background:black;color:white;}"));
+        m_fontPicker->setSelectionMode(QAbstractItemView::SingleSelection);
         m_fontPicker->hide();
         connect(m_fontPicker, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
             chooseFont(item);
@@ -1937,7 +1963,6 @@ public:
             m_confirm->hide(); m_pendingDelete = 0; m_confirmSetting = -1;
         });
         m_confirm->hide();
-        lay->addWidget(m_confirm);
 
         m_holdTimer.setSingleShot(true);
         m_holdTimer.setInterval(LONG_TAP_MS);
@@ -1985,14 +2010,6 @@ public:
         connect(m_next, &QPushButton::clicked, [this]() { turnPage(1); });
         m_pageTimer.setSingleShot(true);
         connect(&m_pageTimer, &QTimer::timeout, this, [this]() { recalculatePages(); });
-
-        // Страховка 1: закрыть после IDLE_MS без касаний
-        m_idle.setSingleShot(true);
-        m_idle.setInterval(IDLE_MS);
-        connect(&m_idle, &QTimer::timeout, this, [this]() { klog(u8("idle close")); close(); });
-        m_idle.start();
-
-        bindSleepTimer(&m_idle);
 
         load();
 
@@ -2046,7 +2063,6 @@ protected:
         const QPoint p = pts.isEmpty() ? QPoint() : mapFromGlobal(pts.first().screenPos().toPoint());
         switch (t) {
         case QEvent::TouchBegin:
-            m_idle.start();       // касание продлевает таймер простоя
             m_press.start();
             m_pressPos = p;
             m_moved = false;
@@ -2167,6 +2183,7 @@ protected:
         if (m_list) m_list->doItemsLayout();
         placeActionMenu();
         if (m_fontPicker && m_fontPicker->isVisible()) placePicker();
+        if (m_confirm && m_confirm->isVisible()) placeConfirmation();
         m_pageTimer.start(0);
     }
     void showEvent(QShowEvent *e) override {
@@ -2179,6 +2196,19 @@ private:
         QWidget *w = childAt(p);
         return w && (w == m_list->viewport() || m_list->viewport()->isAncestorOf(w));
     }
+
+    void placeConfirmation() {
+        if (!m_confirm) return;
+        const int margin = qMax(12, GAP);
+        const int availableW = qMax(1, width() - 2 * margin);
+        const int w = qMin(availableW, qMax(240, qRound(width() * 0.8)));
+        m_confirm->setFixedWidth(w);
+        m_confirm->adjustSize();
+        const int h = qMin(qMax(1, height() - 2 * margin), m_confirm->layout()->hasHeightForWidth()
+                            ? m_confirm->layout()->heightForWidth(w) : m_confirm->sizeHint().height());
+        m_confirm->setGeometry((width() - w) / 2, (height() - h) / 2, w, h);
+    }
+    void showConfirmation() { placeConfirmation(); m_confirm->show(); m_confirm->raise(); }
 
     // Показать отмеченную строку после того, как раскладка обновится
     // (ряд действий и сведения сжимают список и могли её закрыть)
@@ -2199,7 +2229,9 @@ private:
                 if (item && (item->flags() & Qt::ItemIsEnabled)) runMenuAction(item->data(0, Qt::UserRole).toInt());
                 return;
             }
-            if (m_nav->isVisible() && emptyFooterTap(m_nav, m_nav->mapFrom(this, p))) {
+            const QPoint listPoint = m_list->viewport()->mapFrom(this, p);
+            if ((m_list->isVisible() && m_list->viewport()->rect().contains(listPoint) && !m_list->itemAt(listPoint))
+                || (m_nav->isVisible() && emptyFooterTap(m_nav, m_nav->mapFrom(this, p)))) {
                 runMenuAction(ActClose);
                 return;
             }
@@ -2501,7 +2533,7 @@ private:
         if (m_setVals != m_initialSetVals || m_resetHomeDraft) {
             m_pendingDelete = empty ? 6 : 5;
             m_confirmText->setText(u8("Несохранённые настройки будут потеряны. Продолжить?"));
-            m_confirm->show();
+            showConfirmation();
             return;
         }
         showSettings(false);
@@ -2515,7 +2547,7 @@ private:
         m_confirmText->setText(action == 2
             ? u8("Очистить корзину? Все её элементы будут удалены безвозвратно.")
             : u8("Удалить выбранные элементы безвозвратно: %1?").arg(m_deleteSnapshot.size()));
-        m_confirm->show();
+        showConfirmation();
     }
 
     void confirmDeletion() {
@@ -2530,7 +2562,7 @@ private:
         if (action == 8) {
             if (m_confirmSetting >= 0 && m_confirmSetting < m_setVals.size()) {
                 m_setVals[m_confirmSetting] = u8("1");
-                refreshSettings();
+                refreshSettings(); saveSettings();
             }
             m_confirmSetting = -1;
             return;
@@ -2547,7 +2579,7 @@ private:
                 m_resetHomeDraft = true;
                 updateHomeDraft();
             }
-            refreshSettings();
+            refreshSettings(); saveSettings();
             return;
         }
         if (action == 3) {
@@ -2802,6 +2834,7 @@ private:
                              .arg(qRound(BTN_RADIUS)));
         b->setProperty("set_row", idx);
         b->setProperty("set_dir", dir);
+        connect(b, &QPushButton::clicked, this, [this, idx, dir]() { stepSetting(idx, dir); });
         row->addWidget(b, 0);
         m_stepBtns << b;
         return b;
@@ -2811,9 +2844,16 @@ private:
         m_settings = new QWidget(this);
         QVBoxLayout *v = new QVBoxLayout(m_settings);
         v->setContentsMargins(0, 0, 0, 0); v->setSpacing(GAP);
+        QHBoxLayout *header = new QHBoxLayout();
         QLabel *title = new QLabel(u8("Настройки"), m_settings);
         QFont titleFont = fText; titleFont.setBold(true); title->setFont(titleFont);
-        v->addWidget(title);
+        header->addWidget(title); header->addStretch(1);
+        ChromeButton *closeSettings = new ChromeButton(I_CLOSE, QString(), m_settings);
+        closeSettings->setObjectName(u8("closeSettings")); closeSettings->setAccessibleName(u8("Закрыть настройки"));
+        const int headSize = qMax(48, qRound(72 * SCREEN_DPI / 300.0));
+        closeSettings->setFixedSize(headSize, headSize); header->addWidget(closeSettings);
+        connect(closeSettings, &QPushButton::clicked, [this]() { showSettings(false); });
+        v->addLayout(header);
         QHBoxLayout *tabs = new QHBoxLayout();
         m_generalTab = makeButton(tabs, fBtn, "Общие", qMax(40, BTN_HEIGHT / 2), 1);
         m_fontTab = makeButton(tabs, fBtn, "Шрифты", qMax(40, BTN_HEIGHT / 2), 1);
@@ -2828,7 +2868,7 @@ private:
         m_settingsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         QWidget *content = new QWidget(m_settingsScroll);
         QVBoxLayout *rows = new QVBoxLayout(content);
-        rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(0);
+        rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(qMax(8, GAP));
         const double sc = SCREEN_DPI / 300.0;
         const int rowH = qMax(36, qRound(70 * sc));
         for (int i = 0; i < SET_COUNT; ++i) {
@@ -2887,32 +2927,31 @@ private:
                     r->addWidget(toggle);
                     connect(toggle, &QPushButton::clicked, this, [this, i]() { stepSetting(i, 1); });
                 } else if (isFontSizeSetting(u8(SET_ITEMS[i].key))) {
+                    const int bw = qMax(32, qRound(56 * sc));
+                    m_minusBtns[i] = makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
                     SettingSlider *slider = new SettingSlider(SET_ITEMS[i].lo, SET_ITEMS[i].hi, SET_ITEMS[i].step, line);
-                    slider->setAccessibleName(u8(SET_ITEMS[i].label));
-                    m_sliders[i] = slider;
+                    slider->setAccessibleName(u8(SET_ITEMS[i].label)); m_sliders[i] = slider;
                     slider->changed = [this, i](double value) {
-                        m_setVals[i] = QString::number(value, 'f', SET_ITEMS[i].dec);
-                        refreshSettings();
+                        m_setVals[i] = QString::number(value, 'f', SET_ITEMS[i].dec); refreshSettings();
                     };
+                    slider->finished = [this]() { saveSettings(); };
                     r->addWidget(slider, 1);
+                    m_plusBtns[i] = makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
                     val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
                     val->setFixedWidth(qMax(55, rowH)); r->addWidget(val);
-                } else {
-                    val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
-                    val->setMinimumWidth(qMax(70, qRound(180 * sc))); r->addWidget(val);
-                    if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
-                        val->setMaximumWidth(qMax(70, qRound(180 * sc)));
-                        QPushButton *pick = makeButton(r, fBtn, "Выбрать", rowH, 0);
-                        pick->setMinimumWidth(qMax(80, qRound(160 * sc)));
-                        connect(pick, &QPushButton::clicked, [this, i]() {
-                            if (SET_ITEMS[i].type == S_FONT) openFontPicker(i);
-                            else openBookPicker(i);
-                        });
-                    } else {
-                        const int bw = qMax(32, qRound(80 * sc));
-                        m_minusBtns[i] = makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
-                        m_plusBtns[i] = makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
-                    }
+                } else if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
+                    QPushButton *pick = new QPushButton(line);
+                    pick->setObjectName(u8("settingChoice_%1").arg(i));
+                    pick->setFocusPolicy(Qt::NoFocus); pick->setMinimumHeight(rowH);
+                    pick->setFixedWidth(qMax(100, qRound(200 * sc)));
+                    pick->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;}"));
+                    QHBoxLayout *choiceLayout = new QHBoxLayout(pick); choiceLayout->setContentsMargins(4, 0, 4, 0);
+                    val = new QLabel(pick); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
+                    val->setMaximumWidth(qMax(90, qRound(180 * sc))); val->setAttribute(Qt::WA_TransparentForMouseEvents);
+                    choiceLayout->addWidget(val); r->addWidget(pick);
+                    connect(pick, &QPushButton::clicked, [this, i]() {
+                        if (SET_ITEMS[i].type == S_FONT) openFontPicker(i); else openBookPicker(i);
+                    });
                 }
                 m_setLabels[i] = val; m_switches[i] = toggle;
                 items->addWidget(line);
@@ -2927,15 +2966,12 @@ private:
                 QHBoxLayout *actions = new QHBoxLayout();
                 m_resetHomeButton = makeButton(actions, fBtn, "Сбросить домашнюю папку", rowH, 1);
                 connect(m_resetHomeButton, &QPushButton::clicked, [this]() {
-                    m_resetHomeDraft = !m_resetHomeDraft;
-                    updateHomeDraft();
+                    m_resetHomeDraft = true; saveSettings(); updateHomeDraft();
                 });
                 items->addLayout(actions);
             } else if (group == GroupTrash) {
                 QHBoxLayout *actions = new QHBoxLayout();
-                QPushButton *open = makeButton(actions, fBtn, "Открыть корзину", rowH, 1);
                 QPushButton *empty = makeButton(actions, fBtn, "Очистить корзину", rowH, 1);
-                connect(open, &QPushButton::clicked, [this]() { leaveSettingsForTrash(false); });
                 connect(empty, &QPushButton::clicked, [this]() { leaveSettingsForTrash(true); });
                 items->addLayout(actions);
             } else if (group == GroupLogging) {
@@ -2944,7 +2980,7 @@ private:
                 connect(clearLogs, &QPushButton::clicked, [this]() {
                     m_pendingDelete = 3;
                     m_confirmText->setText(u8("Очистить журнал Kobrowse? Это действие нельзя отменить."));
-                    m_confirm->show();
+                    showConfirmation();
                 });
                 items->addLayout(actions);
             }
@@ -2953,38 +2989,22 @@ private:
             rows->addWidget(block);
             if (settingGroupAdvanced(group)) updateAdvancedGroup(group);
         }
-        QLabel *resetHeading = new QLabel(u8("Восстановление настроек"), content);
-        resetHeading->setFont(titleFont); rows->addWidget(resetHeading);
-        QHBoxLayout *resets = new QHBoxLayout();
-        QPushButton *resetTab = makeButton(resets, fBtn, "Сбросить вкладку", rowH, 1);
-        QPushButton *resetAll = makeButton(resets, fBtn, "Сбросить всё", rowH, 1);
-        resetTab->setObjectName(u8("resetTab")); resetAll->setObjectName(u8("resetAll"));
-        rows->addLayout(resets);
-        connect(resetTab, &QPushButton::clicked, [this]() {
-            m_pendingDelete = 7;
-            m_resetTabPending = m_currentSettingsTab;
-            m_confirmText->setText(m_currentSettingsTab == 0
-                ? u8("Сбросить общие настройки? По умолчанию изменение содержимого .adds запрещено. Применится после сохранения.")
-                : u8("Сбросить настройки текущей вкладки? Изменения применятся после сохранения."));
-            m_confirm->show();
-        });
-        connect(resetAll, &QPushButton::clicked, [this]() {
-            m_pendingDelete = 4;
-            m_confirmText->setText(u8("Вернуть все настройки? По умолчанию изменение содержимого .adds запрещено. Применится после сохранения."));
-            m_confirm->show();
-        });
         rows->addStretch(1);
+        QHBoxLayout *resets = new QHBoxLayout();
+        m_resetTabButton = makeButton(resets, fBtn, "Сбросить общие настройки", rowH, 0);
+        m_resetTabButton->setObjectName(u8("resetTab")); resets->addStretch(1); rows->addLayout(resets);
+        connect(m_resetTabButton, &QPushButton::clicked, [this]() {
+            m_pendingDelete = 7; m_resetTabPending = m_currentSettingsTab;
+            m_confirmText->setText(m_currentSettingsTab == 0
+                ? u8("Сбросить общие настройки? Редактирование .adds будет выключено.")
+                : u8("Сбросить настройки шрифтов?"));
+            showConfirmation();
+        });
         m_settingsScroll->setWidget(content); v->addWidget(m_settingsScroll, 1);
-        setSettingsTab(false);
         m_settingsNotice = new FooterNotice(m_settings); m_settingsNotice->setFont(fText);
         m_settingsNotice->setFixedHeight(QFontMetrics(fText).lineSpacing() * 2 + 4);
         v->addWidget(m_settingsNotice);
-        QHBoxLayout *bottom = new QHBoxLayout(); bottom->setSpacing(GAP);
-        QPushButton *bSave = makeButton(bottom, fBtn, "Сохранить", BTN_HEIGHT, 1);
-        QPushButton *bCanc = makeButton(bottom, fBtn, "Отмена", BTN_HEIGHT, 1);
-        v->addLayout(bottom);
-        connect(bSave, &QPushButton::clicked, [this]() { saveSettings(); });
-        connect(bCanc, &QPushButton::clicked, [this]() { showSettings(false); });
+        setSettingsTab(0);
         m_settings->hide();
         m_fonts << QString() << QFontDatabase().families();
     }
@@ -3021,7 +3041,7 @@ private:
         }
         placePicker();
         m_fontPicker->show(); m_fontPicker->raise();
-        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+        if (current) { current->setText(0, u8("✓  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void openBookPicker(int row) {
@@ -3040,7 +3060,7 @@ private:
         }
         placePicker();
         m_fontPicker->show(); m_fontPicker->raise();
-        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+        if (current) { current->setText(0, u8("✓  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void chooseFont(QTreeWidgetItem *item) {
@@ -3057,6 +3077,7 @@ private:
             }
         }
         m_fontPicker->hide();
+        if (n >= 0) saveSettings();
     }
 
     void updateHomeDraft() {
@@ -3078,6 +3099,8 @@ private:
 
     void setSettingsTab(int tab) {
         m_currentSettingsTab = tab;
+        if (m_resetTabButton) setButtonFace(m_resetTabButton, I_NONE, tab == 0
+            ? u8("Сбросить общие настройки") : u8("Сбросить настройки шрифтов"));
         for (int g = 0; g < GroupCount; ++g)
             m_groupBlocks[g]->setVisible(settingGroupTab(static_cast<SettingGroup>(g)) == tab);
         m_generalTab->setEnabled(tab != 0); m_fontTab->setEnabled(tab != 1);
@@ -3190,8 +3213,8 @@ private:
             if (QString::fromLatin1(it.key) == u8("allow_adds_edit") && v.toDouble() == 0) {
                 m_confirmSetting = i; m_pendingDelete = 8;
                 refreshSettings(); // кнопка уже переключилась до сигнала clicked
-                m_confirmText->setText(u8("Разрешить изменение содержимого .adds? Это может повредить установленные приложения. Изменение вступит в силу после сохранения."));
-                m_confirm->show();
+                m_confirmText->setText(u8("Разрешить изменение содержимого .adds? Это может повредить установленные приложения. Настройка применится сразу."));
+                showConfirmation();
                 return;
             }
             v = v.toDouble() != 0 ? u8("0") : u8("1");
@@ -3204,28 +3227,30 @@ private:
         }
         klog(u8("settings step ") + u8(it.key) + u8(": ") + before + u8(" -> ") + v);
         refreshSettings();
+        if (v != before) saveSettings();
     }
 
     // Apply the saved draft in place, keeping navigation and clipboard.
     void saveSettings() {
         QStringList keys;
         for (int i = 0; i < SET_COUNT; ++i) keys << u8(SET_ITEMS[i].key);
-        if (!saveConfig(keys, m_setVals)) { showMessage(u8("Не удалось записать kobrowse.ini")); return; }
+        if (!saveConfig(keys, m_setVals)) {
+            m_setVals = m_initialSetVals; m_resetHomeDraft = false;
+            refreshSettings(); updateHomeDraft(); showMessage(u8("Не удалось записать kobrowse.ini")); return;
+        }
+        m_initialSetVals = m_setVals;
         const bool homeResetFailed = m_resetHomeDraft && !resetHomeFolder(u8(KOBROWSE_HOME));
         loadConfig();
         m_showHidden = SHOW_HIDDEN;
-        m_idle.setInterval(IDLE_MS); m_idle.start();
         m_holdTimer.setInterval(LONG_TAP_MS);
         m_trashButton->setVisible(TRASH_ENABLED);
         QFont listFont = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT);
         listFont.setPixelSize(LIST_PX);
         m_list->setFont(listFont); m_fileDelegate->setListFont(listFont);
-        clearSelection();
-        showSettings(false);
-        load();
-        klog(u8("settings saved and applied without closing"));
-        showMessage(homeResetFailed ? u8("Настройки сохранены, но домашнюю папку сбросить не удалось")
-                                    : u8("Настройки сохранены"));
+        m_resetHomeDraft = false; updateHomeDraft();
+        clearSelection(); load();
+        klog(u8("settings applied"));
+        if (homeResetFailed) showMessage(u8("Настройки сохранены, но домашнюю папку сбросить не удалось"));
     }
 
     void goUp() {
@@ -3246,7 +3271,7 @@ private:
     bool          m_showHidden;
     bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
-    QTimer        m_idle, m_msgTimer, m_ensure, m_setGeom, m_holdTimer, m_pageTimer;
+    QTimer        m_msgTimer, m_ensure, m_setGeom, m_holdTimer, m_pageTimer;
     QString       m_holdPath;
     QStringList   m_deleteSnapshot;
     bool          m_menuTouch = false, m_fontPickerTouch = false, m_pickerIsBooks = false;
@@ -3289,7 +3314,7 @@ private:
     int m_currentSettingsTab = 0, m_resetTabPending = 0;
     QPushButton *m_generalTab = nullptr, *m_fontTab = nullptr;
     ChromeButton *m_trashButton = nullptr;
-    QPushButton *m_resetHomeButton = nullptr;
+    QPushButton *m_resetHomeButton = nullptr, *m_resetTabButton = nullptr;
     QLabel *m_homeStatus = nullptr;
     bool m_resetHomeDraft = false;
     QVector<QWidget *> m_settingRows, m_settingLines;

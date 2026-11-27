@@ -25,12 +25,13 @@ public:
         const int next = qBound(0, qRound(double(x - inset) * steps / span), steps);
         if (next != position) { position = next; update(); if (changed) changed(value()); }
     }
-    void finish() { tracking = false; }
+    void finish() { const bool wasTracking = tracking; tracking = false; if (wasTracking && position != original && finished) finished(); }
     void cancel() {
         if (tracking && position != original) { position = original; update(); if (changed) changed(value()); }
         tracking = false;
     }
     std::function<void(double)> changed;
+    std::function<void()> finished;
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this); p.fillRect(rect(), Qt::white); p.setRenderHint(QPainter::Antialiasing);

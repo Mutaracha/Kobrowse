@@ -12,7 +12,7 @@ inline SettingGroup settingGroup(const QString &key) {
     struct Mapping { const char *key; SettingGroup group; };
     static const Mapping map[] = {
         {"show_hidden", GroupFiles}, {"allow_adds_edit", GroupFiles}, {"trash_enabled", GroupTrash},
-        {"long_tap_ms", GroupBehavior}, {"idle_min", GroupBehavior},
+        {"long_tap_ms", GroupBehavior},
         {"open_books", GroupBooks}, {"logging_enabled", GroupLogging},
         {"list_pt", GroupListFont}, {"list_font", GroupListFont}
     };
