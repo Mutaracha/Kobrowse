@@ -22,6 +22,7 @@
 #include <QPixmap>
 #include <QRawFont>
 #include <QGuiApplication>
+#include <QInputMethod>
 #include <QHash>
 #include <QScreen>
 #include <QSignalMapper>
@@ -302,7 +303,8 @@ static void klog(const QString &msg) {
 static QString humanSize(qint64 b) {
     if (b < 1024) return QString::number(b) + u8(" Б");
     if (b < 1024 * 1024) return QString::number(b / 1024.0, 'f', 1) + u8(" КБ");
-    return QString::number(b / (1024.0 * 1024.0), 'f', 1) + u8(" МБ");
+    if (b < 1024LL * 1024 * 1024) return QString::number(b / (1024.0 * 1024.0), 'f', 1) + u8(" МБ");
+    return QString::number(b / (1024.0 * 1024.0 * 1024.0), 'f', 1) + u8(" ГБ");
 }
 
 // ---------- файловые операции ----------
@@ -468,12 +470,23 @@ public:
         layoutText(displayedName(idx), fontFor(idx), textWidth(), p, pos);
         const int dateLeft = opt.rect.left() + opt.rect.width() * 54 / 100;
         const int sizeLeft = opt.rect.left() + opt.rect.width() * 81 / 100;
-        p->setFont(detailFont());
         const QRect dateRect(dateLeft + 3, opt.rect.top() + PAD_V, qMax(1, sizeLeft - dateLeft - 6), opt.rect.height() - 2 * PAD_V);
         const QRect sizeRect(sizeLeft + 3, opt.rect.top() + PAD_V, qMax(1, opt.rect.right() - sizeLeft - 6), opt.rect.height() - 2 * PAD_V);
-        p->drawText(dateRect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextWordWrap, idx.data(ROLE_DATE).toString());
+        QFont dateFont = detailFont();
+        const QString date = idx.data(ROLE_DATE).toString();
+        const QStringList dateLines = date.split(QLatin1Char('\n'));
+        int datePx = dateFont.pixelSize();
+        while (datePx > 10 && (QFontMetrics(dateFont).width(dateLines.value(0)) > dateRect.width()
+                              || QFontMetrics(dateFont).width(dateLines.value(1)) > dateRect.width()))
+            dateFont.setPixelSize(--datePx);
+        p->setFont(dateFont);
+        p->drawText(dateRect, Qt::AlignVCenter | Qt::AlignLeft, date);
+        QFont sizeFont = detailFont(); int sizePx = sizeFont.pixelSize();
+        const QString size = idx.data(ROLE_SIZE).toString();
+        while (sizePx > 10 && QFontMetrics(sizeFont).width(size) > sizeRect.width()) sizeFont.setPixelSize(--sizePx);
+        p->setFont(sizeFont);
         p->drawText(sizeRect, Qt::AlignVCenter | Qt::AlignRight,
-                    QFontMetrics(detailFont()).elidedText(idx.data(ROLE_SIZE).toString(), Qt::ElideRight, sizeRect.width()));
+                    QFontMetrics(sizeFont).elidedText(size, Qt::ElideRight, sizeRect.width()));
         if (!mark) {
             p->setPen(QPen(Qt::black, qMax(1, qRound(1.5 * SCREEN_DPI / 300.0))));
             p->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
@@ -1273,6 +1286,9 @@ static SearchWindow *g_search = nullptr;
 static void attachSleepWindow(QWidget *window);
 
 class SearchWindow : public QWidget {
+#ifdef KOBROWSE_SETTINGS_TEST
+    friend class SettingsUiTest;
+#endif
 public:
     explicit SearchWindow(QWidget *parent) : QWidget(parent), m_layout(0), m_shift(0), m_alt(0), m_combine(false) {
         setAttribute(Qt::WA_DeleteOnClose);
@@ -1317,6 +1333,17 @@ public:
         top->setSpacing(8);
         m_field = new QueryField(this, fField);
         top->addWidget(m_field, 1);
+        // Public Qt input method first; if the platform does not expose one,
+        // keep the existing keyboard and QueryField as the fallback.
+        m_nativeField = new QLineEdit(this);
+        m_nativeField->setObjectName(u8("systemInputField"));
+        m_nativeField->setFont(fField); m_nativeField->hide();
+        top->addWidget(m_nativeField, 1);
+        connect(m_nativeField, &QLineEdit::textChanged, [this](const QString &text) {
+            m_field->setText(text); setCursorPos(m_nativeField->cursorPosition());
+        });
+        connect(m_nativeField, &QLineEdit::cursorPositionChanged, [this](int, int pos) { setCursorPos(pos); });
+        connect(m_nativeField, &QLineEdit::returnPressed, [this]() { submitInput(); });
         m_closeBtn = new KeyButton(this);
         m_closeBtn->setText(QString());              // глиф ✕ отсутствует в шрифте Kobo
         m_closeBtn->setProperty("role", "Cls");      // крестик рисуется через QPainter
@@ -1374,6 +1401,12 @@ public:
         m_msg->setFixedHeight(QFontMetrics(f).lineSpacing() * 2 + 4);
         lay->addWidget(m_msg);
         lay->addWidget(m_kbBox);
+        m_nativeSpace = new QWidget(this); m_nativeSpace->setFixedHeight(0); m_nativeSpace->hide();
+        lay->addWidget(m_nativeSpace);
+        m_inputTimer.setSingleShot(true); m_inputTimer.setInterval(800);
+        connect(&m_inputTimer, &QTimer::timeout, [this]() { finishInputProbe(); });
+        if (QGuiApplication::inputMethod())
+            connect(QGuiApplication::inputMethod(), &QInputMethod::visibleChanged, this, [this]() { updateSystemInput(); });
         m_msgTimer.setSingleShot(true); m_msgTimer.setInterval(5000);
         connect(&m_msgTimer, &QTimer::timeout, this, [this]() { m_msg->setMessage(QString()); });
 
@@ -1390,6 +1423,13 @@ protected:
         QWidget::showEvent(e);
         const int w = qMax(240, this->width() - 24);
         if (m_kbBox && w != m_lastKbWidth) buildKeyboard();
+        beginInputProbe();
+    }
+    void hideEvent(QHideEvent *e) override {
+        m_inputTimer.stop();
+        if ((m_inputPending || m_systemInput) && QGuiApplication::inputMethod()) QGuiApplication::inputMethod()->hide();
+        m_inputPending = false; m_systemInput = false;
+        QWidget::hideEvent(e);
     }
     void resizeEvent(QResizeEvent *e) override {
         QWidget::resizeEvent(e);
@@ -1402,6 +1442,7 @@ protected:
         if (!(t == QEvent::TouchBegin || t == QEvent::TouchUpdate || t == QEvent::TouchEnd
               || t == QEvent::TouchCancel) || obj == this || !obj->isWidgetType()) return false;
         QWidget *w = static_cast<QWidget *>(obj);
+        if ((m_inputPending || m_systemInput) && (w == m_nativeField || m_nativeField->isAncestorOf(w))) return false;
         if (isAncestorOf(w)) return handleTouch(e);
         if (w == window() || w->isAncestorOf(this)) {
             const QList<QTouchEvent::TouchPoint> pts = static_cast<QTouchEvent *>(e)->touchPoints();
@@ -1412,6 +1453,40 @@ protected:
     }
 
 private:
+    void beginInputProbe() {
+        if (!QGuiApplication::inputMethod() || m_inputPending || m_systemInput) return;
+        m_inputPending = true;
+        m_nativeField->setText(m_field->text()); m_nativeField->setCursorPosition(m_cur);
+        m_field->hide(); m_nativeField->show(); m_nativeField->setFocus(Qt::OtherFocusReason);
+        m_inputTimer.start(); QGuiApplication::inputMethod()->show();
+        updateSystemInput();
+    }
+    void updateSystemInput() {
+        QInputMethod *im = QGuiApplication::inputMethod();
+        if (!im || (!m_inputPending && !m_systemInput)) return;
+        if (im->isVisible() && isVisible()) {
+            m_inputTimer.stop(); m_inputPending = false; m_systemInput = true;
+            m_field->hide(); m_nativeField->show(); m_kbBox->hide();
+            const int keyboardHeight = qBound(0, qRound(im->keyboardRectangle().height()), height() / 2);
+            m_nativeSpace->setFixedHeight(keyboardHeight); m_nativeSpace->setVisible(keyboardHeight > 0);
+        } else if (m_systemInput) {
+            m_systemInput = false; useFallbackInput();
+        }
+    }
+    void finishInputProbe() {
+        if (!m_inputPending) return;
+        if (QGuiApplication::inputMethod() && QGuiApplication::inputMethod()->isVisible()) updateSystemInput();
+        else { m_inputPending = false; useFallbackInput(); }
+    }
+    void useFallbackInput() {
+        m_field->setText(m_nativeField->text()); setCursorPos(m_nativeField->cursorPosition());
+        m_nativeField->hide(); m_nativeSpace->hide(); m_field->show(); m_kbBox->show();
+    }
+    void submitInput() {
+        releaseCombine();
+        if (m_rename) { const QString error = m_rename(m_field->text()); if (error.isEmpty()) close(); else showMsg(error); }
+        else doSearch();
+    }
     void insertText(const QString &s) {
         if (s.isEmpty()) return;
         const int c = cursorPos();
@@ -1494,10 +1569,7 @@ private:
         if (role == "Cmb") { m_combine = !m_combine; m_combineBuf.clear(); updateKeys(); return; }
         if (role == "Spc") { insertChar(QLatin1Char(' ')); return; }
         if (role == "Ret") {
-            releaseCombine();
-            if (m_rename) { const QString error = m_rename(m_field->text()); if (error.isEmpty()) close(); else showMsg(error); }
-            else doSearch();
-            return;
+            submitInput(); return;
         }
         if (role == "DB") { backspace(); return; }
         if (role == "DF") { deleteForward(); return; }
@@ -1553,6 +1625,7 @@ private:
             m_field->setFont(ff);
             m_field->setQueryFont(ff);
             m_field->setFixedHeight(kh);
+            if (m_nativeField) { m_nativeField->setFont(ff); m_nativeField->setFixedHeight(kh); }
         }
         if (m_closeBtn) {
             QFont cf = m_closeBtn->font();
@@ -1767,6 +1840,10 @@ private:
     QLabel *m_title;
     FooterNotice *m_msg;
     QueryField *m_field;
+    QLineEdit *m_nativeField = nullptr;
+    QWidget *m_nativeSpace = nullptr;
+    QTimer m_inputTimer;
+    bool m_inputPending = false, m_systemInput = false;
     QTreeWidget *m_list;
     QPushButton *m_closeBtn = nullptr;
     QWidget *m_kbBox = nullptr;
@@ -2029,9 +2106,9 @@ public:
         const int widths[] = { 54, 27, 19 };
         for (int n = 0; n < 3; ++n) {
             QPushButton *button = new QPushButton(u8(columnLabels[n]), m_columnHeader);
-            button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(fList);
+            button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(statusFont);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-            button->setMinimumHeight(qMax(48, QFontMetrics(fList).lineSpacing() + 12));
+            button->setMinimumHeight(qMax(48, QFontMetrics(statusFont).lineSpacing() + 12));
             button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;} QPushButton:pressed{background:black;color:white;}"));
             m_sortButtons << button; columns->addWidget(button, widths[n]);
             connect(button, &QPushButton::clicked, [this, n]() { setSort(static_cast<BrowserSort>(n)); });
@@ -3674,7 +3751,6 @@ private:
         QFont listFont = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT);
         listFont.setPixelSize(LIST_PX);
         m_list->setFont(listFont); m_fileDelegate->setListFont(listFont);
-        for (QPushButton *button : m_sortButtons) button->setFont(listFont);
         m_actions->setFont(listFont);
         m_resetHomeDraft = false; updateHomeDraft();
         clearSelection(); load();

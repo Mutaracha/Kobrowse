@@ -250,6 +250,22 @@ public:
             && !sleepRecoveryAllowed(true, false, false, false, true), "sleep, PIN, USB and missing APIs block restore");
         const QString pathBeforeSleep = w.m_path; w.hide(); w.show();
         require(w.m_path == pathBeforeSleep, "hide and restore preserves browsing state");
+        // The public input-method probe must retain the built-in keyboard when
+        // offscreen Qt has no visible input method, without losing text/cursor.
+        SearchWindow *input = new SearchWindow(&w);
+        int submits = 0;
+        input->startRename(QString::fromUtf8("Имя"), [&submits](const QString &value) -> QString {
+            ++submits; return value == QString::fromUtf8("Тест") ? QString::fromUtf8("Проверка") : QString::fromUtf8("Ошибка");
+        }, QString::fromUtf8("Создать папку"));
+        input->resize(768, 1024); input->show(); QApplication::processEvents();
+        require(input->m_inputPending && !input->m_systemInput, "input method probe starts safely");
+        input->m_nativeField->setText(QString::fromUtf8("Тест")); input->m_nativeField->setCursorPosition(2);
+        input->finishInputProbe(); QApplication::processEvents();
+        require(!input->m_inputPending && !input->m_systemInput && input->m_kbBox->isVisible()
+                && input->m_field->text() == QString::fromUtf8("Тест") && input->cursorPos() == 2,
+                "input method fallback preserves text, cursor and built-in keyboard");
+        input->submitInput(); require(submits == 1 && input->isVisible(), "failed submit occurs once and keeps editor open");
+        delete input;
         testFolderIcons(w); testNames(w); testPathLabel(w); testFooter(w); testTouchFeedback(w);
         require(w.m_sortButtons.size() == 3 && w.m_sortButtons[0]->text().contains(QString::fromUtf8("↑")), "default sort header");
         const QPoint sortTap = w.m_sortButtons[1]->mapTo(&w, w.m_sortButtons[1]->rect().center());

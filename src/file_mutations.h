@@ -169,8 +169,31 @@ inline bool createLocalDirectory(const QString &root, const QString &parent, con
         || name.contains(QChar(0)) || name.contains(QLatin1Char('\n')) || name.contains(QLatin1Char('\r'))) {
         error = QString::fromUtf8("Недопустимое имя"); return false;
     }
+    if (name.size() > 255 || name.endsWith(QLatin1Char('.')) || name.endsWith(QLatin1Char(' '))) {
+        error = QString::fromUtf8("Недопустимое имя"); return false;
+    }
+    for (int i = 0; i < name.size(); ++i) {
+        if (name.at(i).unicode() < 32 || name.at(i).unicode() == 127
+            || QString::fromLatin1(":*?\"<>|").contains(name.at(i))) {
+            error = QString::fromUtf8("Недопустимое имя"); return false;
+        }
+    }
+    const QString stem = name.section(QLatin1Char('.'), 0, 0).toUpper();
+    if (stem == QLatin1String("CON") || stem == QLatin1String("PRN") || stem == QLatin1String("AUX") || stem == QLatin1String("NUL")
+        || (stem.size() == 4 && (stem.startsWith(QLatin1String("COM")) || stem.startsWith(QLatin1String("LPT")))
+            && stem.at(3) >= QLatin1Char('1') && stem.at(3) <= QLatin1Char('9'))) {
+        error = QString::fromUtf8("Недопустимое имя"); return false;
+    }
     if (!safeLocalPath(root, parent) || !QFileInfo(parent).isDir() || !writableLocalDirectory(root, parent, allowAdds)) {
         error = QString::fromUtf8("Папка недоступна для изменений"); return false;
+    }
+    QFileInfoList existing;
+    if (!operationEntries(parent, existing)) { error = QString::fromUtf8("Не удалось прочитать папку"); return false; }
+    const QString folded = name.normalized(QString::NormalizationForm_C).toCaseFolded();
+    for (const QFileInfo &item : existing) {
+        if (item.fileName().normalized(QString::NormalizationForm_C).toCaseFolded() == folded) {
+            error = QString::fromUtf8("Имя уже занято или недоступно"); return false;
+        }
     }
     const QString dest = QDir(parent).filePath(name);
     if (protectedLocalPath(root, dest, allowAdds) || !safeLocalPath(root, dest, true)

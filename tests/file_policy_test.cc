@@ -92,6 +92,9 @@ int main(int argc, char **argv) {
     require(QFileInfo(root + QString::fromUtf8("/Books/Новая папка")).isDir(), "created folder exists");
     require(!createLocalDirectory(root, root + "/Books", QString::fromUtf8("Новая папка"), createError), "existing folder not replaced");
     require(!createLocalDirectory(root, root + "/Books", "../bad", createError), "folder traversal rejected");
+    require(!createLocalDirectory(root, root + "/Books", QString::fromUtf8("НОВАЯ ПАПКА"), createError), "case aliases rejected");
+    require(!createLocalDirectory(root, root + "/Books", "bad?name", createError), "FAT invalid names rejected");
+    require(!createLocalDirectory(root, root + "/Books", "CON.txt", createError), "FAT reserved names rejected");
     require(!createLocalDirectory(root, root + "/.kobo", "bad", createError), "protected folder rejected");
     require(!createLocalDirectory(root, root, ".kobo", createError), "protected destination rejected");
     QFileInfoList sorted;
