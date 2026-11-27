@@ -26,7 +26,8 @@ public:
         if (!unit || unit > 4 * 1024 * 1024) return fail(error, "Не удалось определить свободное место");
         const quint64 avail = quint64(info.f_bavail) > std::numeric_limits<quint64>::max() / unit
             ? std::numeric_limits<quint64>::max() : quint64(info.f_bavail) * unit;
-        const quint64 needed = total + quint64(count) * unit + 1024 * 1024;
+        // Old kernels need a second copy during safe no-overwrite publication.
+        const quint64 needed = 2 * total + 2 * quint64(count) * unit + 1024 * 1024;
         if (avail < needed) return fail(error, "Недостаточно свободного места для распаковки");
         return true;
     }
@@ -103,6 +104,73 @@ bool cleanupStage(const QString &root, const QString &path, QString &error, cons
     if (!ok) error += QString::fromUtf8("; временная папка сохранена: ") + path;
     return ok;
 }
+
+// Old Linux kernels and FAT do not reliably offer rename-with-no-replace or
+// hard links. Reserve each new name with mkdir/O_EXCL and copy only verified
+// staged contents. Never delete a partly published tree on failure: its name
+// and the intact staging path are reported, so it can be inspected safely.
+bool copyReserved(const QString &root, const QString &from, const QString &to,
+                  bool &created, QString &error, const ZipExtractHooks *hooks) {
+    if (!safeLocalPath(root, from) || !safeLocalPath(root, QFileInfo(to).absolutePath())) {
+        error = QString::fromUtf8("Небезопасный путь публикации"); return false;
+    }
+    const QFileInfo src(from);
+    if (src.isDir()) {
+        if (::mkdir(QFile::encodeName(to).constData(), 0700) != 0) {
+            error = QString::fromUtf8("Не удалось создать папку назначения"); return false;
+        }
+        created = true;
+        QFileInfoList children;
+        if (!operationEntries(from, children)) { error = QString::fromUtf8("Не удалось прочитать временную папку"); return false; }
+        for (const QFileInfo &child : children) {
+            bool childCreated = false;
+            if (!copyReserved(root, child.absoluteFilePath(), to + QLatin1Char('/') + child.fileName(), childCreated, error, hooks)) return false;
+        }
+        return true;
+    }
+    if (!src.isFile() || src.isSymLink()) { error = QString::fromUtf8("Недопустимый временный файл"); return false; }
+    int input = ::open(QFile::encodeName(from).constData(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    if (input < 0) { error = QString::fromUtf8("Не удалось открыть временный файл"); return false; }
+    int output = ::open(QFile::encodeName(to).constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (output < 0) { ::close(input); error = QString::fromUtf8("Не удалось создать файл назначения"); return false; }
+    created = true;
+    bool ok = true; char buffer[32768];
+    for (;;) {
+        ssize_t n = ::read(input, buffer, sizeof(buffer));
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) { ok = false; break; }
+        if (!n) break;
+        if (hooks && hooks->copyWrite) {
+            if (!hooks->copyWrite(output, buffer, int(n))) { ok = false; break; }
+            continue;
+        }
+        ssize_t done = 0;
+        while (done < n) {
+            const ssize_t w = ::write(output, buffer + done, size_t(n - done));
+            if (w < 0 && errno == EINTR) continue;
+            if (w <= 0) { ok = false; break; }
+            done += w;
+        }
+        if (!ok) break;
+    }
+    if (::fsync(output) != 0) ok = false;
+    if (::close(output) != 0) ok = false;
+    if (::close(input) != 0) ok = false;
+    if (!ok) error = QString::fromUtf8("Ошибка записи при публикации");
+    return ok;
+}
+
+bool nameOccupied(const QString &parent, const QString &name, bool &occupied) {
+    QFileInfoList entries;
+    if (!operationEntries(parent, entries)) return false;
+    const QString folded = name.normalized(QString::NormalizationForm_C).toCaseFolded();
+    occupied = false;
+    for (const QFileInfo &entry : entries)
+        if (entry.fileName().normalized(QString::NormalizationForm_C).toCaseFolded() == folded) { occupied = true; break; }
+    const QFileInfo candidate(parent + QLatin1Char('/') + name);
+    if (candidate.exists() || candidate.isSymLink()) occupied = true; // FAT short aliases
+    return true;
+}
 }
 
 bool extractZipArchive(const QString &root, const QString &archive, QString &published,
@@ -136,40 +204,55 @@ bool extractZipArchive(const QString &root, const QString &archive, QString &pub
         if (error.isEmpty()) error = QString::fromUtf8("Не удалось проверить архив");
         cleanupStage(root, stage, error, hooks); return false;
     }
-    QString base = info.completeBaseName().left(60);
-    if (!base.isEmpty() && base.at(base.size() - 1).isHighSurrogate()) base.chop(1);
-    if (base.isEmpty()) base = QString::fromUtf8("архив");
-    const QString prefix = parent + QString::fromUtf8("/Распаковано-") + base;
-    for (int n = 0; n < 10000; ++n) {
-        const QString target = prefix + (n ? QLatin1Char('-') + QString::number(n) : QString());
-        if (!safeLocalPath(root, parent) || !writableLocalDirectory(root, parent, allowAdds)
-            || protectedLocalPath(root, target, allowAdds)) {
-            error = QString::fromUtf8("Место назначения недоступно"); break;
-        }
-        const int result = hooks && hooks->publish ? hooks->publish(stage, target) : renameNoReplace(stage, target);
-        if (result == 0) { published = target; return true; }
-        if (result == EEXIST || result == ENOTEMPTY) continue;
-        if (result == ENOSYS || result == EINVAL || result == EOPNOTSUPP) {
-            // Old kernels/filesystems may lack renameat2. Reserve a fresh outer
-            // directory atomically, then publish into its empty interior. The
-            // resulting extra level is deliberate; existing files are untouched.
-            if (::mkdir(QFile::encodeName(target).constData(), 0700) != 0) {
-                if (errno == EEXIST) continue;
-                error = QString::fromUtf8("Не удалось создать папку назначения"); break;
-            }
-            const QString nested = target + QString::fromUtf8("/Содержимое");
-            if (!QFileInfo(nested).exists() && !QFileInfo(nested).isSymLink()
-                && ::rename(QFile::encodeName(stage).constData(), QFile::encodeName(nested).constData()) == 0) {
-                published = nested; return true;
-            }
-            if (::rmdir(QFile::encodeName(target).constData()) != 0)
-                error = QString::fromUtf8("Не удалось опубликовать; папка назначения осталась: ") + target;
-            else error = QString::fromUtf8("Не удалось опубликовать распакованные файлы");
-            break;
-        }
-        error = QString::fromUtf8("Не удалось опубликовать распакованные файлы"); break;
+    QFileInfoList entries;
+    if (!operationEntries(stage, entries)) {
+        error = QString::fromUtf8("Не удалось прочитать временную папку");
+        cleanupStage(root, stage, error, hooks); return false;
     }
-    if (error.isEmpty()) error = QString::fromUtf8("Не удалось выбрать свободное имя папки");
-    cleanupStage(root, stage, error, hooks);
-    return false;
+    QStringList completed;
+    for (const QFileInfo &entry : entries) {
+        const QString original = entry.fileName();
+        QString base = original, ext;
+        if (!entry.isDir()) {
+            const int dot = original.lastIndexOf(QLatin1Char('.'));
+            if (dot > 0) { base = original.left(dot); ext = original.mid(dot); }
+        }
+        bool success = false, partial = false;
+        QString target;
+        for (int n = 0; n < 10000; ++n) {
+            const QString name = n == 0 ? original : base + QLatin1Char('_') + QString::number(n) + ext;
+            target = parent + QLatin1Char('/') + name;
+            bool occupied = false;
+            if (!safeLocalPath(root, parent) || !writableLocalDirectory(root, parent, allowAdds)
+                || protectedLocalPath(root, target, allowAdds) || !nameOccupied(parent, name, occupied)) {
+                error = QString::fromUtf8("Место назначения недоступно"); break;
+            }
+            if (occupied) continue;
+            const int result = hooks && hooks->publish ? hooks->publish(entry.absoluteFilePath(), target)
+                                                        : renameNoReplace(entry.absoluteFilePath(), target);
+            if (result == 0) { success = true; break; }
+            if (result == EEXIST || result == ENOTEMPTY) continue;
+            if (result == ENOSYS || result == EINVAL || result == EOPNOTSUPP) {
+                success = copyReserved(root, entry.absoluteFilePath(), target, partial, error, hooks);
+                break;
+            }
+            error = QString::fromUtf8("Не удалось опубликовать файл"); break;
+        }
+        if (!success) {
+            if (error.isEmpty()) error = QString::fromUtf8("Не удалось выбрать свободное имя");
+            if (partial) completed.prepend(target + QString::fromUtf8(" (не полностью)"));
+            if (!completed.isEmpty()) {
+                error += QString::fromUtf8("; временная папка: ") + stage
+                    + QString::fromUtf8("; опубликовано или начато: ") + completed.join(QString::fromUtf8(", "));
+            } else cleanupStage(root, stage, error, hooks);
+            return false;
+        }
+        completed << target;
+    }
+    if (!cleanupStage(root, stage, error, hooks)) {
+        error = QString::fromUtf8("Файлы извлечены, но не удалось удалить временную папку: ") + stage;
+        return false;
+    }
+    published = parent;
+    return true;
 }

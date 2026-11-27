@@ -6,6 +6,7 @@
 static bool failWrite(int, const char *, int) { return false; }
 static int failPublish(const QString &, const QString &) { return EIO; }
 static int oldKernel(const QString &, const QString &) { return ENOSYS; }
+static int partialPublish(const QString &, const QString &) { static int calls = 0; return ++calls == 1 ? ENOSYS : EIO; }
 static bool failCleanup(const QString &, const QString &) { return false; }
 
 int main(int argc, char **argv) {
@@ -16,6 +17,8 @@ int main(int argc, char **argv) {
     if (mode == "write" || mode == "cleanup") hooks.write = failWrite;
     if (mode == "publish") hooks.publish = failPublish;
     if (mode == "old-kernel") hooks.publish = oldKernel;
+    if (mode == "partial") hooks.publish = partialPublish;
+    if (mode == "copy-write") { hooks.publish = oldKernel; hooks.copyWrite = failWrite; }
     if (mode == "cleanup") hooks.cleanup = failCleanup;
     QString output, error;
     const bool ok = extractZipArchive(QString::fromLocal8Bit(argv[1]), QString::fromLocal8Bit(argv[2]),

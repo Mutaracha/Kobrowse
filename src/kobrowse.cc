@@ -24,6 +24,7 @@
 #include <QGuiApplication>
 #include <QHash>
 #include <QScreen>
+#include <QSignalMapper>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -59,6 +60,8 @@
 
 #include <NickelHook.h>
 
+#include "path_label.h"
+#include "sleep_policy.h"
 #include "file_policy.h"
 #include "file_mutations.h"
 #include "zip_writer.h"
@@ -1200,6 +1203,7 @@ static double maxLayoutWidth(const KbLayout &L) {
 
 class SearchWindow;
 static SearchWindow *g_search = nullptr;
+static void attachSleepWindow(QWidget *window);
 
 class SearchWindow : public QWidget {
 public:
@@ -1729,6 +1733,7 @@ static void ksearch_open() {
     QWidget *host = koboHostWindow();
     if (!host) { klog(u8("ksearch: no host")); return; }
     g_search = new SearchWindow(host);
+    attachSleepWindow(g_search);
     g_search->setGeometry(host->rect());
     g_search->show(); g_search->raise();
     klog(u8("ksearch window shown"));
@@ -1739,6 +1744,7 @@ static void krename_open(const QString &name, const std::function<QString(const 
     QWidget *host = koboHostWindow();
     if (!host) return;
     g_search = new SearchWindow(host);
+    attachSleepWindow(g_search);
     g_search->startRename(name, submit);
     g_search->setGeometry(host->rect());
     g_search->show(); g_search->raise();
@@ -1895,10 +1901,10 @@ public:
         lay->addWidget(m_toolbar);
 
         // Текущий путь остаётся видимым при прокрутке списка.
-        m_pathLabel = new QLabel(this);
+        m_pathLabel = new BrowserPathLabel(this);
         QFont pathFont = fMsg; pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1)));
         m_pathLabel->setFont(pathFont);
-        m_pathLabel->setWordWrap(true);
+        m_pathLabel->setWordWrap(false);
         m_pathLabel->setTextFormat(Qt::PlainText);
         m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:6px;"));
         lay->addWidget(m_pathLabel);
@@ -2036,10 +2042,15 @@ public:
         m_workOverlay->hide();
         m_workTimer.setSingleShot(true);
         connect(&m_workTimer, &QTimer::timeout, this, [this]() {
+            if (property("kobrowseSleepHidden").toBool()) return;
             const std::function<void()> operation = m_work; m_work = std::function<void()>();
             if (operation) operation();
             load();
             m_busy = false; m_workOverlay->hide();
+            if (!m_operationDetail.isEmpty()) {
+                m_info->setText(m_operationDetail.left(800)); m_info->show(); m_pageTimer.start(0);
+                m_operationDetail.clear();
+            }
             update(); if (m_list->isVisible()) m_list->viewport()->update();
         });
 
@@ -2100,6 +2111,7 @@ public:
     }
 
     ~KobrowseWindow() { klog(u8("window closed")); cancelBrightness(); qApp->removeEventFilter(this); }
+    void resumeDeferredWork() { if (m_busy && m_work && !m_workTimer.isActive()) m_workTimer.start(100); }
 
 protected:
     // Касания обрабатываем сами: TouchBegin нужно принять, иначе TouchEnd не придёт.
@@ -2662,7 +2674,7 @@ private:
 
     void startWork(const QString &text, const std::function<void()> &work) {
         if (m_busy) return;
-        m_busy = true; m_work = work; m_holdTimer.stop();
+        m_busy = true; m_work = work; m_operationDetail.clear(); m_holdTimer.stop();
         m_workText->setText(text); m_workOverlay->setGeometry(rect());
         m_workOverlay->show(); m_workOverlay->raise(); m_workOverlay->update();
         // Give the normal event loop a chance to paint before blocking I/O.
@@ -2873,7 +2885,7 @@ private:
     // Прочитать текущую папку и заполнить список
     void load() {
         m_emptyTrashButton->setVisible(m_path == m_trash);
-        m_pathLabel->setText(m_path);
+        m_pathLabel->setPath(m_root, m_path);
         m_fileCount = 0; m_dirCount = 0; m_pageIndex = 0; m_pageStarts.clear();
         m_list->clear();
         updateActions();
@@ -3028,10 +3040,12 @@ private:
         klog(u8("zip extract start: ") + path);
         if (!extractZipArchive(m_root, path, output, error, ALLOW_ADDS)) {
             klog(u8("zip extract failed: ") + error);
-            load(); showMessage(u8("Не удалось распаковать: ") + error);
+            m_operationDetail = u8("Не удалось распаковать: ") + error;
+            if (m_operationDetail.size() > 800) m_operationDetail = m_operationDetail.left(760) + u8("… (подробности в журнале)");
+            load(); showMessage(u8("Ошибка распаковки; подробности выше"));
         } else {
             ::sync(); klog(u8("zip extract complete: ") + output);
-            load(); showMessage(u8("Распаковано: ") + QDir(m_path).relativeFilePath(output));
+            load(); showMessage(u8("Архив распакован в текущую папку"));
         }
     }
 
@@ -3615,7 +3629,7 @@ private:
     QLabel *m_workText = nullptr;
     bool m_busy = false;
     std::function<void()> m_work;
-    QString       m_holdPath;
+    QString       m_holdPath, m_operationDetail;
     QStringList   m_deleteSnapshot;
     bool          m_menuTouch = false, m_fontPickerTouch = false, m_pickerIsBooks = false;
     int           m_menuScrollStart = 0, m_fontPickerScrollStart = 0, m_fontPickerRow = -1;
@@ -3638,7 +3652,8 @@ private:
     QStringList   m_clip;            // буфер: пути для вставки
     bool          m_clipCut = false; // буфер «вырезан» (перенос) или «скопирован»
     QTreeWidget  *m_list = nullptr;
-    QLabel       *m_info = nullptr, *m_pathLabel = nullptr;
+    QLabel       *m_info = nullptr;
+    BrowserPathLabel *m_pathLabel = nullptr;
     FooterNotice *m_footerNotice = nullptr, *m_settingsNotice = nullptr;
     DeviceStatusBar *m_deviceStatus = nullptr;
     QWidget      *m_settings = nullptr, *m_nav = nullptr, *m_toolbar = nullptr; // экран настроек; ряд навигации
@@ -3681,7 +3696,68 @@ static QTimer              *g_poll = nullptr;  // страховка: inotify н
 // Do not hook the same power/USB PLT entries: NickelHook replaces, rather than chains,
 // another plugin's hook (notably Kobalt's shutdown save/drain).
 static QTimer *g_lifecycleClose = nullptr;
+static QTimer *g_sleepRetry = nullptr;
+static QPointer<QObject> g_sleepManager;
 static QPointer<QObject> g_plugManager;
+
+// The same optional queries used by Kobalt: do not raise an overlay while
+// Nickel's sleep, PIN, or USB view is still visible. Missing APIs fail closed.
+static bool nativeWakeReady() {
+    typedef const void *(*Manager)();
+    typedef bool (*Query)(const void *);
+    const Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
+    const Query sleeping = nsym<Query>("_ZNK22N3PowerWorkflowManager8sleepingEv");
+    const Query visible = nsym<Query>("_ZNK22N3PowerWorkflowManager16sleepViewVisibleEv");
+    const Query pin = nsym<Query>("_ZNK22N3PowerWorkflowManager25pinCodeInputDialogVisibleEv");
+    const Manager usb = nsym<Manager>("_ZN19PlugWorkflowManager14sharedInstanceEv");
+    const Query usbVisible = nsym<Query>("_ZN19PlugWorkflowManager20pluggedInViewVisibleEv");
+    if (!power || !sleeping || !visible || !pin || !usb || !usbVisible) return false;
+    const void *p = power(), *u = usb();
+    return p && u && sleepRecoveryAllowed(true, sleeping(p), visible(p), pin(p), usbVisible(u));
+}
+static void restoreAfterSleep() {
+    if (!g_win && !g_search) { g_sleepRetry->stop(); return; }
+    if (!nativeWakeReady()) return;
+    g_sleepRetry->stop();
+    if (g_win && g_win->property("kobrowseSleepHidden").toBool()) {
+        g_win->setProperty("kobrowseSleepHidden", false); g_win->show(); g_win->raise(); g_win->resumeDeferredWork();
+    }
+    if (g_search && g_search->property("kobrowseSleepHidden").toBool()) {
+        g_search->setProperty("kobrowseSleepHidden", false); g_search->show(); g_search->raise();
+    }
+    klog(u8("sleep: restored after native views closed"));
+}
+static void attachSleepWindow(QWidget *window) {
+    typedef QObject *(*Manager)();
+    const Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
+    QObject *manager = power ? power() : nullptr;
+    // If the wake queries are missing, do not hide the only visible window.
+    if (!manager || !g_sleepRetry || !nsym<void *>("_ZNK22N3PowerWorkflowManager8sleepingEv")
+        || !nsym<void *>("_ZNK22N3PowerWorkflowManager16sleepViewVisibleEv")
+        || !nsym<void *>("_ZNK22N3PowerWorkflowManager25pinCodeInputDialogVisibleEv")
+        || !nsym<void *>("_ZN19PlugWorkflowManager14sharedInstanceEv")
+        || !nsym<void *>("_ZN19PlugWorkflowManager20pluggedInViewVisibleEv")) {
+        klog(u8("sleep: native queries unavailable")); return;
+    }
+    if (g_sleepManager != manager) {
+        if (g_sleepManager) QObject::disconnect(g_sleepManager, nullptr, g_sleepRetry, nullptr);
+        g_sleepManager = manager;
+        const bool resumed = QObject::connect(manager, SIGNAL(resumedFromSleep()), g_sleepRetry, SLOT(start()), Qt::DirectConnection);
+        QObject::connect(manager, SIGNAL(resumingFromSleep()), g_sleepRetry, SLOT(start()), Qt::DirectConnection);
+        QObject::connect(manager, SIGNAL(aboutToSleep()), g_sleepRetry, SLOT(stop()), Qt::DirectConnection);
+        if (!resumed) { g_sleepManager.clear(); klog(u8("sleep: resume signal unavailable")); return; }
+    }
+    // Map the old-style runtime signal to a lambda without adding a moc build.
+    // Track only windows which were visible when sleep actually started.
+    QSignalMapper *mapper = new QSignalMapper(window);
+    mapper->setMapping(manager, window);
+    QObject::connect(mapper, static_cast<void (QSignalMapper::*)(QWidget *)>(&QSignalMapper::mapped),
+                     window, [window](QWidget *) {
+        if (window->isVisible()) { window->setProperty("kobrowseSleepHidden", true); window->hide(); }
+    });
+    const bool ok = QObject::connect(manager, SIGNAL(aboutToSleep()), mapper, SLOT(map()), Qt::DirectConnection);
+    klog(ok ? u8("sleep: hide and restore connected") : u8("sleep: signal unavailable"));
+}
 static void closeForLifecycle() {
     if (g_search || g_win) klog(u8("USB lifecycle: closing windows"));
     if (g_search) g_search->close();
@@ -3732,15 +3808,9 @@ static void kobrowse_open() {
 
     loadConfig();                     // kobrowse.ini читается при каждом открытии
     g_win = new KobrowseWindow(host);
-    // Release the overlay before Nickel paints its own sleep view. Connecting
-    // to the signal does not replace Kobalt's power hooks. The window closes;
-    // it is not reopened over a potentially still-visible sleep/PIN screen.
-    typedef QObject *(*PowerManager)();
-    PowerManager power = nsym<PowerManager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
-    QObject *manager = power ? power() : nullptr;
-    const bool sleepConnected = manager && QObject::connect(manager, SIGNAL(aboutToSleep()),
-                                                               g_win.data(), SLOT(close()), Qt::DirectConnection);
-    klog(sleepConnected ? u8("sleep signal connected; window will close") : u8("sleep signal unavailable"));
+    // Hide without destroying the window; restore only after Nickel's sleep,
+    // PIN and USB views are gone. Never replace Kobalt's lifecycle hooks.
+    attachSleepWindow(g_win.data());
     g_win->setGeometry(host->rect()); // всё главное окно
     g_win->show();
     g_win->raise();
@@ -3937,6 +4007,9 @@ static int kobrowse_init() {
         nh_log("uninstall requested; waiting for library failsafe");
         return 0;
     }
+    g_sleepRetry = new QTimer(QCoreApplication::instance());
+    g_sleepRetry->setInterval(100);
+    QObject::connect(g_sleepRetry, &QTimer::timeout, []() { restoreAfterSleep(); });
     g_lifecycleClose = new QTimer();
     g_lifecycleClose->setSingleShot(true); g_lifecycleClose->setInterval(0);
     QObject::connect(g_lifecycleClose, &QTimer::timeout, []() { closeForLifecycle(); });

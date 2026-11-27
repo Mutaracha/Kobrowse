@@ -8,11 +8,12 @@ struct ZipExtractHooks {
     bool (*write)(int fd, const char *bytes, int size) = nullptr;
     int (*publish)(const QString &source, const QString &destination) = nullptr;
     bool (*cleanup)(const QString &root, const QString &stage) = nullptr;
+    bool (*copyWrite)(int fd, const char *bytes, int size) = nullptr;
 };
 
-// ZIP stays in place. Fully checked contents are published in a new directory;
-// existing destinations are never intentionally overwritten. On failure, error
-// includes a retained staging path if cleanup fails.
+// ZIP stays in place. Fully checked top-level entries are published beside it;
+// collisions receive suffixes. On partial publication, error reports outputs
+// and the retained staging directory. Existing files are not overwritten.
 bool extractZipArchive(const QString &root, const QString &archive, QString &published,
                        QString &error, bool allowAdds = false, const ZipExtractHooks *hooks = nullptr);
 #endif

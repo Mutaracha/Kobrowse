@@ -35,17 +35,18 @@ assert source.read_bytes() == original
 assert not list(root.glob('.kobrowse-extract-*'))
 assert not list(root.glob('Распаковано-*'))
 
-# A pre-existing output folder with different case cannot be replaced on FAT.
-existing = root / 'распаковано-test'
+# A pre-existing folder with different case cannot be replaced on FAT.
+existing = root / 'КНИГИ'
 existing.mkdir()
 (existing / 'keep').write_bytes(b'keep')
 original = make_zip([('книги/file.txt', b'content')])
 source.write_bytes(original)
-result = subprocess.run([exe, str(root), str(source)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-assert result.returncode == 0, result.stderr.decode('utf-8', 'replace')
-output = pathlib.Path(os.fsdecode(result.stdout).strip())
-assert (output / 'книги/file.txt').read_bytes() == b'content'
-assert (existing / 'keep').read_bytes() == b'keep'
-assert source.read_bytes() == original
-assert not list(root.glob('.kobrowse-extract-*'))
+for mode, expected in [('old-kernel', 'книги_1'), (None, 'книги_2')]:
+    args = [exe, str(root), str(source)] + ([mode] if mode else [])
+    result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert result.returncode == 0, result.stderr.decode('utf-8', 'replace')
+    assert (root / expected / 'file.txt').read_bytes() == b'content'
+    assert (existing / 'keep').read_bytes() == b'keep'
+    assert source.read_bytes() == original
+    assert not list(root.glob('.kobrowse-extract-*'))
 print('FAT ZIP extraction tests passed')

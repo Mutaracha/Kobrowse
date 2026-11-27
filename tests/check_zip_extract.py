@@ -40,26 +40,45 @@ class ExtractTest(unittest.TestCase):
     def stages(self):
         return list(self.root.glob('.kobrowse-extract-*'))
 
-    def test_extract_preserves_zip_and_existing_folders(self):
-        prior = self.root / 'Распаковано-test'
+    def test_extract_preserves_existing_and_renames_only_top_level(self):
+        prior = self.root / 'Книги'
         prior.mkdir()
         (prior / 'keep').write_bytes(b'original')
-        data = zip_bytes([('Книги/книга.fb2', b'hello' * 10000), ('Книги/пустая/', b''), ('x', b'')])
+        (self.root / 'x.txt').write_bytes(b'old')
+        (self.root / 'x_1.txt').write_bytes(b'old1')
+        data = zip_bytes([('Книги/книга.fb2', b'hello' * 10000), ('Книги/пустая/', b''), ('x.txt', b'new')])
         result = self.run_extract(data)
-        folder = pathlib.Path(result.stdout.decode().strip())
-        self.assertNotEqual(folder, prior)
-        self.assertEqual((folder / 'Книги/книга.fb2').read_bytes(), b'hello' * 10000)
-        self.assertTrue((folder / 'Книги/пустая').is_dir())
-        self.assertEqual((folder / 'x').read_bytes(), b'')
+        self.assertEqual(pathlib.Path(result.stdout.decode().strip()), self.root)
+        self.assertEqual((self.root / 'Книги_1/книга.fb2').read_bytes(), b'hello' * 10000)
+        self.assertTrue((self.root / 'Книги_1/пустая').is_dir())
+        self.assertEqual((self.root / 'x_2.txt').read_bytes(), b'new')
         self.assertEqual((prior / 'keep').read_bytes(), b'original')
+        self.assertEqual((self.root / 'x.txt').read_bytes(), b'old')
         self.assertFalse(self.stages())
+        self.run_extract(data)
+        self.assertEqual((self.root / 'Книги_2/книга.fb2').read_bytes(), b'hello' * 10000)
+        self.assertEqual((self.root / 'x_3.txt').read_bytes(), b'new')
 
     def test_old_kernel_fallback_and_empty_archive(self):
-        result = self.run_extract(zip_bytes([]), mode='old-kernel')
-        folder = pathlib.Path(result.stdout.decode().strip())
-        self.assertEqual(folder.name, 'Содержимое')
-        self.assertTrue(folder.is_dir())
+        self.run_extract(zip_bytes([]), mode='old-kernel')
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['test.zip'])
+        data = zip_bytes([('nested/a.txt', b'hello'), ('top.txt', b'top')])
+        self.run_extract(data, mode='old-kernel')
+        self.assertEqual((self.root / 'nested/a.txt').read_bytes(), b'hello')
+        self.assertEqual((self.root / 'top.txt').read_bytes(), b'top')
+        self.run_extract(data, mode='old-kernel')
+        self.assertEqual((self.root / 'nested_1/a.txt').read_bytes(), b'hello')
+        self.assertEqual((self.root / 'top_1.txt').read_bytes(), b'top')
         self.assertFalse(self.stages())
+
+    def test_case_and_symlink_conflicts(self):
+        (self.root / 'HELLO.txt').write_bytes(b'old')
+        (self.root / 'link').symlink_to(self.root / 'missing')
+        self.run_extract(zip_bytes([('hello.txt', b'new'), ('link', b'new link')]))
+        self.assertEqual((self.root / 'hello_1.txt').read_bytes(), b'new')
+        self.assertEqual((self.root / 'HELLO.txt').read_bytes(), b'old')
+        self.assertTrue((self.root / 'link').is_symlink())
+        self.assertEqual((self.root / 'link_1').read_bytes(), b'new link')
 
     def test_dangerous_and_corrupted_archives_are_not_published(self):
         link = zipfile.ZipInfo('link')
@@ -77,7 +96,7 @@ class ExtractTest(unittest.TestCase):
             with self.subTest(size=len(data)):
                 self.run_extract(data, good=False)
                 self.assertFalse(self.stages())
-                self.assertFalse(list(self.root.glob('Распаковано-*')))
+                self.assertEqual({p.name for p in self.root.iterdir() if p.name != 'test.zip'}, set())
 
     def test_injected_write_publish_and_cleanup_failure(self):
         data = zip_bytes([('dir/a', b'hello' * 5000)])
@@ -90,6 +109,27 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(len(self.stages()), 1)
         self.assertIn(str(self.stages()[0]), result.stderr.decode())
         self.assertFalse(list(self.root.glob('Распаковано-*')))
+
+    def test_partial_publication_is_reported_and_staging_kept(self):
+        data = zip_bytes([('a.txt', b'first'), ('b.txt', b'second')])
+        result = self.run_extract(data, mode='partial', good=False)
+        self.assertEqual((self.root / 'a.txt').read_bytes(), b'first')
+        self.assertFalse((self.root / 'b.txt').exists())
+        self.assertEqual(len(self.stages()), 1)
+        self.assertEqual((self.stages()[0] / 'b.txt').read_bytes(), b'second')
+        message = result.stderr.decode('utf-8')
+        self.assertIn(str(self.root / 'a.txt'), message)
+        self.assertIn(str(self.stages()[0]), message)
+
+    def test_old_kernel_copy_failure_reports_partial_and_retains_stage(self):
+        data = zip_bytes([('dir/a.txt', b'important')])
+        result = self.run_extract(data, mode='copy-write', good=False)
+        self.assertTrue((self.root / 'dir').is_dir())
+        self.assertEqual(len(self.stages()), 1)
+        self.assertEqual((self.stages()[0] / 'dir/a.txt').read_bytes(), b'important')
+        message = result.stderr.decode('utf-8')
+        self.assertIn(str(self.root / 'dir'), message)
+        self.assertIn(str(self.stages()[0]), message)
 
     def test_failed_disk_write_no_publication(self):
         data = zip_bytes([('big', os.urandom(32768))])

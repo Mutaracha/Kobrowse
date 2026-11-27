@@ -62,6 +62,17 @@ class SettingsUiTest {
         }
         w.resize(768, 1024); QApplication::processEvents();
     }
+    static void testPathLabel(KobrowseWindow &w) {
+        const QFont font = w.m_pathLabel->font(); const QFontMetrics fm(font);
+        require(displayBrowserPath("/mnt/onboard", "/mnt/onboard", font, 500) == "/", "root shown as slash");
+        require(displayBrowserPath("/mnt/onboard", "/mnt/onboard/a/b", font, 500) == "/a/b", "root prefix hidden");
+        const int width = fm.width(QString::fromUtf8("…/middle/last")) + 1;
+        const QString shortened = displayBrowserPath("/mnt/onboard", "/mnt/onboard/first/middle/last", font, width);
+        require(shortened == QString::fromUtf8("…/middle/last"), "path removes whole leading components");
+        const QString longLeaf = displayBrowserPath("/mnt/onboard", "/mnt/onboard/veryveryverylongleaf", font, fm.width("short"));
+        require(fm.width(longLeaf) <= fm.width("short") && !longLeaf.contains('\n'), "long leaf fits one line");
+        require(!w.m_pathLabel->wordWrap(), "address is single line");
+    }
     static void testFooter(KobrowseWindow &w) {
         const std::vector<int> originalPages = w.m_pageStarts;
         const int originalIndex = w.m_pageIndex, oldFiles = w.m_fileCount, oldDirs = w.m_dirCount;
@@ -120,9 +131,9 @@ class SettingsUiTest {
         QTreeWidgetItem item; item.setData(0, ROLE_PATH, archive); item.setData(0, ROLE_DIR, false);
         w.onItem(&item);
         require(w.m_confirm->isVisible(), "extract asks before writing");
-        require(!QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book")).exists(), "no extraction before confirmation");
+        require(!QFileInfo(w.m_root + "/fixture-book_1.txt").exists(), "no extraction before confirmation");
         w.findChild<QPushButton *>("confirmNo")->click();
-        require(!QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book")).exists(), "cancel leaves archive untouched");
+        require(!QFileInfo(w.m_root + "/fixture-book_1.txt").exists(), "cancel leaves archive untouched");
         w.onItem(&item);
         w.findChild<QPushButton *>("confirmYes")->click();
         require(w.m_busy && w.m_workOverlay->isVisible(), "extract shows busy message");
@@ -131,7 +142,7 @@ class SettingsUiTest {
         w.m_workTimer.stop(); QMetaObject::invokeMethod(&w.m_workTimer, "timeout", Qt::DirectConnection);
         require(!w.m_busy && !w.m_workOverlay->isVisible(), "extract closes busy message");
         require(QFileInfo(archive).exists(), "UI extraction preserves archive");
-        require(QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book/fixture-book.txt")).exists(),
+        require(QFileInfo(w.m_root + "/fixture-book_1.txt").exists(),
                 "UI extraction publishes contents");
         QFile log(QString::fromUtf8(KOBROWSE_LOG));
         require(log.open(QIODevice::ReadOnly), "diagnostic log created");
@@ -208,7 +219,15 @@ public:
         require(clock->font().family() == batteryLabel->font().family() && build->font().family() == clock->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
         require(w.m_actions->font().pixelSize() == ptToPx(8.5), "context menu uses 8.5 points");
-        testFolderIcons(w); testNames(w); testFooter(w); testTouchFeedback(w);
+        require(sleepRecoveryAllowed(true, false, false, false, false), "restore only when native views clear");
+        require(!sleepRecoveryAllowed(false, false, false, false, false)
+            && !sleepRecoveryAllowed(true, true, false, false, false)
+            && !sleepRecoveryAllowed(true, false, true, false, false)
+            && !sleepRecoveryAllowed(true, false, false, true, false)
+            && !sleepRecoveryAllowed(true, false, false, false, true), "sleep, PIN, USB and missing APIs block restore");
+        const QString pathBeforeSleep = w.m_path; w.hide(); w.show();
+        require(w.m_path == pathBeforeSleep, "hide and restore preserves browsing state");
+        testFolderIcons(w); testNames(w); testPathLabel(w); testFooter(w); testTouchFeedback(w);
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
         require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");
