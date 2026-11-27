@@ -73,7 +73,7 @@ public:
             brightness(nullptr), maximum(nullptr), setBrightness(nullptr), cancelChanging(nullptr),
             constructGesture(nullptr), finishGesture(nullptr) {}
         bool valid() const {
-            return device && supports && sensor && constructLight && brightness && maximum
+            return device && supports && constructLight && brightness && maximum
                 && setBrightness && cancelChanging && constructGesture && finishGesture;
         }
     };
@@ -98,6 +98,12 @@ public:
         }
         return n[0] > 4 || (n[0] == 4 && (n[1] > 38 || (n[1] == 38 && n[2] >= 21908)));
     }
+    // PRODUCT identifiers for the two sensorless models used for device
+    // testing. Kobalt treats the sensor symbol as optional; if it is absent,
+    // do not make that assumption for other, unknown hardware.
+    static bool knownSensorlessProduct(const QByteArray &product) {
+        return product.startsWith("io") || product.startsWith("alyssum");
+    }
     QString errorDetail() const override { return error; }
     bool begin() override {
         if (start >= 0) return true;
@@ -115,7 +121,10 @@ public:
         // Do not change automatic brightness until PowerSettings is ported.
         if (!device) { error = QLatin1String("Nickel device unavailable"); return false; }
         if (!api.supports(device)) { error = QLatin1String("device has no frontlight"); return false; }
-        if (api.sensor(device)) { error = QLatin1String("automatic brightness sensor unsupported"); return false; }
+        if (!api.sensor && !knownSensorlessProduct(qgetenv("PRODUCT"))) {
+            error = QLatin1String("sensor capability symbol missing and device is not known sensorless"); return false;
+        }
+        if (api.sensor && api.sensor(device)) { error = QLatin1String("automatic brightness sensor unsupported"); return false; }
         if (!light) {
             void *storage = ::operator new(lightBytes);
             api.constructLight(storage, owner);
@@ -159,7 +168,6 @@ private:
         QStringList names;
         if (!api.device) names << QLatin1String("Device::getCurrentDevice");
         if (!api.supports) names << QLatin1String("Device::supportsLight");
-        if (!api.sensor) names << QLatin1String("Device::hasAmbientLightSensor");
         if (!api.constructLight) names << QLatin1String("FrontLight constructor");
         if (!api.brightness) names << QLatin1String("FrontLight::brightness");
         if (!api.maximum) names << QLatin1String("FrontLight::maxBrightness");

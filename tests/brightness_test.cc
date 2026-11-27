@@ -81,5 +81,17 @@ int main(int argc, char **argv) {
         require(light.begin() && light.setLevel(30) == 30, "active gesture before destruction");
     }
     require(level == 75 && lightDestroyed == 1 && saves == 1 && cancellations > 0, "destruction cancels and frees native object");
+    const QByteArray oldProduct = qgetenv("PRODUCT");
+    NativeBrightness::Api noSensorSymbol = api; noSensorSymbol.sensor = nullptr;
+    {
+        NativeBrightness light(&parent, noSensorSymbol, sizeof(FakeLight), sizeof(FakeGesture));
+        qputenv("PRODUCT", "unknown");
+        require(!light.begin() && light.errorDetail().contains("sensor capability"), "unknown model with missing sensor API rejected");
+        qputenv("PRODUCT", "io");
+        require(light.begin() && light.finish(false), "known Libra 2 works without optional sensor symbol");
+        qputenv("PRODUCT", "alyssum");
+        require(light.begin() && light.finish(false), "known Glo HD works without optional sensor symbol");
+    }
+    qputenv("PRODUCT", oldProduct);
     QTextStream(stdout) << "Brightness gesture and mock native backend tests passed\n";
 }
