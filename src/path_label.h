@@ -16,7 +16,9 @@ inline QString displayBrowserPath(const QString &root, const QString &path, cons
     if (metrics.width(shown) <= width) return shown;
     const QStringList parts = shown.split(QLatin1Char('/'), QString::SkipEmptyParts);
     for (int first = 1; first < parts.size(); ++first) {
-        const QString candidate = QString::fromUtf8("…/") + parts.mid(first).join(QLatin1String("/"));
+        QStringList suffix;
+        for (int i = first; i < parts.size(); ++i) suffix << parts.at(i);
+        const QString candidate = QString::fromUtf8("…/") + suffix.join(QLatin1String("/"));
         if (metrics.width(candidate) <= width) return candidate;
     }
     // A single very long final component cannot fit intact; elide only it.

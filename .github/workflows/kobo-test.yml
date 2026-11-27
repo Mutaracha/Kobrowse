@@ -61,7 +61,13 @@ jobs:
       - name: Build and verify Qt 5 test package
         env:
           KOBROWSE_REQUIRE_CLEAN: '1'
-        run: bash scripts/build-kobo.sh
+        run: |
+          if ! bash scripts/build-kobo.sh > build/cross-build.log 2>&1; then
+            cat build/cross-build.log
+            grep -E '(error:|undefined reference|Error [0-9]|fatal error:)' build/cross-build.log | head -n 12 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/cross-build.log
       - uses: actions/upload-artifact@v7
         with:
           name: kobrowse-kobo-qt5-test
