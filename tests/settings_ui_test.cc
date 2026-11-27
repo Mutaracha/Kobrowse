@@ -21,6 +21,21 @@ public:
     static void run(KobrowseWindow &w, const QString &homeFile) {
         w.resize(768, 1024); w.show(); QApplication::processEvents();
         require(w.m_deviceStatus->height() < 50, "compact status row");
+        const QString folder = w.m_root + "/.adds";
+        w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
+        require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut
+            && w.m_actions->topLevelItem(1)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCopy
+            && !(w.m_actions->topLevelItem(2)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(3)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
+            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActZip,
+            "home action follows first separator");
+        w.m_clip = QStringList() << (w.m_root + "/.adds/archive-source"); w.updateActions();
+        require(w.m_actions->topLevelItem(2)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActPaste
+            && !(w.m_actions->topLevelItem(3)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome,
+            "home follows separator with clipboard");
+        w.m_clip.clear(); w.clearSelection();
         w.showSettings(true); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings fit screen");
         const int font = row("list_pt"), family = row("list_font"), hold = row("long_tap_ms");

@@ -2390,15 +2390,15 @@ private:
         QList<ActionMenuEntry> entries;
         const bool selected = !m_marked.isEmpty();
         if (selected) {
-            if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
-                entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row);
             entries << ActionMenuEntry(u8("Вырезать"), ActCut, row)
                     << ActionMenuEntry(u8("Копировать"), ActCopy, row);
         }
         if (!m_clip.isEmpty()) entries << ActionMenuEntry(u8("Вставить"), ActPaste, row);
         if (selected) {
-            entries << ActionMenuEntry(QString(), 0, separator, false)
-                    << ActionMenuEntry(u8("Архивировать"), ActZip, row)
+            entries << ActionMenuEntry(QString(), 0, separator, false);
+            if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
+                entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row);
+            entries << ActionMenuEntry(u8("Архивировать"), ActZip, row)
                     << ActionMenuEntry(u8("Удалить"), ActDelete, row);
             if (m_marked.size() == 1) entries << ActionMenuEntry(u8("Переименовать"), ActRename, row);
         }
