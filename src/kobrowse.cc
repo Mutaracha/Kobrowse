@@ -420,12 +420,22 @@ public:
             } else if (kind == FileArchive) {
                 // Three bound volumes, modelled on the supplied archive icon.
                 const qreal x = box.left(), y = box.top(), w = box.width(), h = box.height();
-                p->drawRoundedRect(box, sz * .09, sz * .09);
-                p->drawLine(QPointF(x, y + h / 3), QPointF(x + w, y + h / 3));
-                p->drawLine(QPointF(x, y + 2*h / 3), QPointF(x + w, y + 2*h / 3));
-                p->drawLine(QPointF(x + w*.62, y), QPointF(x + w*.62, y+h));
-                p->drawLine(QPointF(x + w*.75, y), QPointF(x + w*.75, y+h));
-                p->setBrush(Qt::white); p->drawRect(QRectF(x + w*.55, y + h*.40, w*.27, h*.20)); p->setBrush(Qt::NoBrush);
+                QPolygonF outline; outline << QPointF(x, y) << QPointF(x+w*.69, y)
+                    << QPointF(x+w, y+h*.19) << QPointF(x+w, y+h)
+                    << QPointF(x+w*.24, y+h) << QPointF(x, y+h*.81) << QPointF(x, y);
+                p->drawPolyline(outline);
+                p->drawLine(QPointF(x, y), QPointF(x+w*.24, y+h*.19));
+                p->drawLine(QPointF(x+w*.24, y+h*.19), QPointF(x+w, y+h*.19));
+                p->drawLine(QPointF(x+w*.24, y+h*.19), QPointF(x+w*.24, y+h));
+                for (int i = 1; i <= 2; ++i) {
+                    const qreal yy = y+h*(.19 + .27*i);
+                    p->drawLine(QPointF(x, yy-h*.19), QPointF(x+w*.24, yy));
+                    p->drawLine(QPointF(x+w*.24, yy), QPointF(x+w, yy));
+                }
+                p->drawLine(QPointF(x+w*.48, y), QPointF(x+w*.72, y+h*.19));
+                p->drawLine(QPointF(x+w*.72, y+h*.19), QPointF(x+w*.72, y+h));
+                p->setBrush(mark ? Qt::black : Qt::white);
+                p->drawRect(QRectF(x+w*.64, y+h*.43, w*.18, h*.16)); p->setBrush(Qt::NoBrush);
             }
         }
         p->setPen(ink);
@@ -1872,9 +1882,9 @@ public:
         toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(qMax(6, GAP * 3 / 2));
         ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar, true);
         QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(8 * SCREEN_DPI / 72.0)));
-        back->setFont(backFont); back->setIconScale(1.25);
+        back->setFont(backFont); back->setIconScale(1.5);
         back->setMinimumHeight(qMax(48, qRound(72 * SCREEN_DPI / 300.0)));
-        back->setFixedWidth(QFontMetrics(backFont).width(u8("Закрыть Kobrowse")) + qRound(ICON_PX * 1.25) + 36);
+        back->setFixedWidth(QFontMetrics(backFont).width(u8("Закрыть Kobrowse")) + qRound(ICON_PX * 1.5) + 36);
         toolbar->addWidget(back); toolbar->addStretch(1);
         ChromeButton *find = new ChromeButton(I_SEARCH, QString(), m_toolbar);
         ChromeButton *settings = new ChromeButton(I_GEAR, QString(), m_toolbar);
@@ -1894,9 +1904,9 @@ public:
         connect(m_trashButton, &QPushButton::clicked, [this]() { if (pathWithin(m_path, m_trash)) { m_path = m_trash; goUp(); } else openTrash(); });
         m_emptyTrashButton = new ChromeButton(I_TRASH, u8("Очистить корзину"), m_toolbar, true);
         m_emptyTrashButton->setObjectName(u8("emptyTrash"));
-        m_emptyTrashButton->setFont(backFont);
+        m_emptyTrashButton->setFont(backFont); m_emptyTrashButton->setIconScale(1.5);
         m_emptyTrashButton->setMinimumHeight(chromeHeight);
-        m_emptyTrashButton->setFixedWidth(QFontMetrics(backFont).width(u8("Очистить корзину")) + qRound(ICON_PX * 1.25) + 36);
+        m_emptyTrashButton->setFixedWidth(QFontMetrics(backFont).width(u8("Очистить корзину")) + qRound(ICON_PX * 1.5) + 36);
         m_emptyTrashButton->hide(); toolbar->insertWidget(toolbar->indexOf(home), m_emptyTrashButton);
         connect(m_emptyTrashButton, &QPushButton::clicked, [this]() { requestDeletion(2); });
         toolbar->addWidget(find); toolbar->addWidget(settings);
@@ -3127,7 +3137,7 @@ private:
         QFont titleFont = fText; titleFont.setBold(true); title->setFont(titleFont);
         header->addWidget(title); header->addStretch(1);
         ChromeButton *closeSettings = new ChromeButton(I_CLOSE, QString(), m_settings);
-        closeSettings->setIconScale(1.25);
+        closeSettings->setIconScale(1.5);
         closeSettings->setObjectName(u8("closeSettings")); closeSettings->setAccessibleName(u8("Закрыть настройки"));
         const int headSize = qMax(48, qRound(72 * SCREEN_DPI / 300.0));
         closeSettings->setFixedSize(headSize, headSize); header->addWidget(closeSettings);
