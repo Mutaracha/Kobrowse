@@ -8,3 +8,6 @@ trap 'rm -rf "$build"' EXIT
 c++ -std=c++11 -fPIC -Wall -Wextra "$root/tests/zip_driver.cc" "$root/src/zip_writer.cc" \
     $(pkg-config --cflags --libs Qt5Core) -lz -o "$build/zip-driver"
 python3 "$root/tests/check_zip.py" "$build/zip-driver" -v
+c++ -std=c++11 -fPIC -Wall -Wextra "$root/tests/zip_validator_driver.cc" "$root/src/zip_validator.cc" \
+    $(pkg-config --cflags --libs Qt5Core) -lz -o "$build/zip-validator"
+python3 "$root/tests/check_zip_validator.py" "$build/zip-validator" "$build/zip-driver" -v

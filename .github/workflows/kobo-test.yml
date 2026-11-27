@@ -48,8 +48,14 @@ jobs:
           cat build/settings-test.log
       - name: Test brightness gesture and mock native backend (offscreen)
         run: bash tests/run-brightness-tests.sh
-      - name: Test ZIP creation
-        run: bash tests/run-zip-tests.sh
+      - name: Test ZIP creation and isolated validation
+        run: |
+          if ! bash tests/run-zip-tests.sh > build/zip-test.log 2>&1; then
+            cat build/zip-test.log
+            grep -E '(error:|FAIL:|ERROR:|FAILED|AssertionError|Traceback)' build/zip-test.log | head -n 8 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/zip-test.log
       - name: Test package checks
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify Qt 5 test package

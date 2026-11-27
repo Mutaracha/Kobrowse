@@ -37,8 +37,9 @@
   строк страниц (Qt 5 Widgets, платформа offscreen), `bash tests/run-settings-ui-tests.sh`
   для реального окна настроек в изолированном временном дереве,
   `bash tests/run-brightness-tests.sh` для жеста и подставного API подсветки и
-  `bash tests/run-zip-tests.sh` для проверки реального ZIP-писателя
-  стандартным Python `zipfile` (нужны Qt 5 и zlib). Для проверки защит на FAT
+  `bash tests/run-zip-tests.sh` для проверки реального ZIP-писателя и
+  изолированного валидатора ZIP стандартным Python `zipfile` (нужны Qt 5 и zlib).
+  Валидатор не извлекает файлы; распаковка остаётся отключённой. Для проверки защит на FAT
   запустите `bash tests/run-fat-policy-tests.sh`: нужны dosfstools, Qt 5,
   `pkg-config`, `sudo` без пароля и возможность монтировать временный loop-образ.
   Скрипт использует только созданный им изолированный образ, не устройства.

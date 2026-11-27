@@ -2,7 +2,7 @@
 include NickelHook/NickelHook.mk
 
 override LIBRARY  := libkobrowse.so
-override SOURCES  += src/kobrowse.cc src/zip_writer.cc
+override SOURCES  += src/kobrowse.cc src/zip_writer.cc src/zip_validator.cc
 override PKGCONF  += Qt5Widgets
 override LDFLAGS  += -lz
 override CXXFLAGS += -Wall -Wextra -Wno-missing-field-initializers
