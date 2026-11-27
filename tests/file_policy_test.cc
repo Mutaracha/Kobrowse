@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <unistd.h>
+#include <fcntl.h>
 #include <cstdlib>
 
 static void require(bool condition, const char *message) {
@@ -49,8 +50,8 @@ int main(int argc, char **argv) {
     require(normalization.add(QString::fromUtf8("é.txt").toUtf8(), true, false, zipError), "zip composed unicode");
     require(!normalization.add(QString::fromUtf8("é.txt").toUtf8(), true, false, zipError), "zip canonical collision rejected");
     ZipPathManifest malformed;
-    require(!malformed.add(QByteArray("\\xff", 1), true, false, zipError), "invalid UTF-8 rejected");
-    require(!malformed.add(QByteArray("a\\0b", 3), true, false, zipError), "NUL rejected");
+    require(!malformed.add(QByteArray("\xff", 1), true, false, zipError), "invalid UTF-8 rejected");
+    require(!malformed.add(QByteArray("a\0b", 3), true, false, zipError), "NUL rejected");
     require(fileKind("Книга.KEPUB.EPUB") == FileEpub && fileKind("read.PDF") == FilePdf
             && fileKind("novel.FB2") == FileFb2 && fileKind("book.mobi") == FileBook, "book format icons");
     require(fileKind("picture.TIFF") == FileImage && fileKind("photo.JPEG") == FileImage, "image icons");
@@ -156,7 +157,7 @@ int main(int argc, char **argv) {
     require(!safeLocalPath(root, root + "/dangling", true), "dangling link rejected");
     require(!safeCopyTree(root, root + "/Books"), "nested link prevents copy");
     require(safeCopyTree(root, root + "/Excluded"), "ordinary folder can be copied");
-    const QString homeFile = tmp.path() + "/home";
+    const QString homeFile = root + "/.adds/app/home-test";
     require(readHomeFolder(root, homeFile) == root, "missing home falls back");
     require(writeHomeFolder(root, homeFile, root + "/Books"), "save home");
     require(readHomeFolder(root, homeFile) == root + "/Books", "load home");
@@ -166,7 +167,18 @@ int main(int argc, char **argv) {
     require(readHomeFolder(root, homeFile) == root + "/Books", "failed writes preserve home");
     writeFile(homeFile, (root + "/missing").toUtf8());
     require(readHomeFolder(root, homeFile) == root, "missing saved folder falls back");
-    require(resetHomeFolder(homeFile) && readHomeFolder(root, homeFile) == root, "reset home");
+    require(resetHomeFolder(root, homeFile) && readHomeFolder(root, homeFile) == root, "reset home");
+    const QString externalHome = tmp.path() + "/external-home";
+    writeFile(externalHome, (root + "/Books").toUtf8());
+    require(::symlink(QFile::encodeName(externalHome).constData(), QFile::encodeName(homeFile).constData()) == 0,
+            "home file symlink fixture");
+    require(readHomeFolder(root, homeFile) == root, "home file link cannot be read");
+    require(!writeHomeFolder(root, homeFile, root + "/Books"), "home file link cannot be written");
+    require(!resetHomeFolder(root, homeFile), "home file link cannot be removed");
+    require(QFileInfo(homeFile).isSymLink() && QFileInfo(externalHome).exists(), "home link and target preserved");
+    require(QFile::remove(homeFile), "remove home test link");
+    require(!writeHomeFolder(root, externalHome, root + "/Books") && !resetHomeFolder(root, externalHome),
+            "home file outside root rejected");
     QString renameError;
     writeFile(root + "/Books/existing", "keep");
     require(!renameLocalEntry(root, root + "/Books/book.epub", "existing", renameError), "rename collision rejected");
@@ -200,10 +212,33 @@ int main(int argc, char **argv) {
     require(!copyStagedTree(root, sourceDir, sourceDir + "/sub/copy", copyError), "copy into self rejected");
     require(!copyStagedTree(root, root + "/Books", destDir + "/unsafe", copyError), "nested symlink copy rejected");
     require(!copyStagedTree(root, sourceDir, root + "/.kobo/copied", copyError), "copy into protected folder rejected");
+    require(!copyStagedTree(root, root, destDir + "/root-copy", copyError), "copy root denied");
+    require(!copyStagedTree(root, root + "/.kobo/Kobo", destDir + "/system-copy", copyError), "copy protected source denied");
+    require(!copyStagedTree(root, root + "/.adds/app/renamed", destDir + "/adds-copy", copyError), "disabled adds source denied");
+    require(copyStagedTree(root, root + "/.adds/app/renamed", destDir + "/adds-copy", copyError, nullptr, true), "enabled adds source allowed");
     require(QDir(destDir).entryList(QStringList() << ".kobrowse-copy-*", QDir::Dirs | QDir::Hidden).isEmpty(), "successful stage cleaned");
+    const QString unreadableNameDir = root + "/unrepresentable";
+    require(QDir().mkdir(unreadableNameDir), "invalid name directory fixture");
+    writeFile(unreadableNameDir + "/keep", "keep");
+    const QByteArray invalidName("\xff", 1);
+    if (QFile::encodeName(QFile::decodeName(invalidName)) != invalidName) {
+        const QByteArray rawPath = QFile::encodeName(unreadableNameDir) + "/" + invalidName;
+        const int fd = ::open(rawPath.constData(), O_CREAT | O_WRONLY | O_EXCL, 0600);
+        require(fd >= 0, "create unrepresentable name"); ::close(fd);
+        QFileInfoList entries;
+        require(!operationEntries(unreadableNameDir, entries) && entries.isEmpty(), "reject lossy directory names");
+        require(!safeCopyTree(root, unreadableNameDir), "unrepresentable source rejected");
+        require(!copyStagedTree(root, unreadableNameDir, destDir + "/bad-names", copyError), "no incomplete copy published");
+        require(!removeTreeNoFollow(root, unreadableNameDir) && QFileInfo(unreadableNameDir + "/keep").exists(),
+                "deletion does not proceed after failed listing");
+        require(::unlink(rawPath.constData()) == 0, "remove unrepresentable test file");
+    }
+    QFileInfoList missingEntries;
+    require(!operationEntries(root + "/missing-dir", missingEntries), "failed directory open is not an empty listing");
     const QString trash = root + "/.kobrowse_trash";
     require(QDir().mkpath(trash + "/nested"), "trash folder");
     writeFile(trash + "/nested/book", "trash");
+    require(copyStagedTree(root, trash + "/nested/book", destDir + "/trash-copy", copyError), "copy trash contents remains available");
     require(::symlink((root + "/Books/book.epub").toLocal8Bit().constData(),
                       (trash + "/nested/link").toLocal8Bit().constData()) == 0, "trash link");
     require(!mayDeleteLocalEntry(root, trash, trash), "trash root cannot be deleted");

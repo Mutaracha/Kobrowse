@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
         require(!renameLocalEntry(root, path, "renamed", error), "protected rename denied");
         require(!moveLocalEntry(root, path, root + "/moved", error), "protected move denied");
         require(!moveLocalEntry(root, path, trash + "/moved", error, true), "protected trash move denied");
+        require(!copyStagedTree(root, path, root + "/protected-copy", error), "protected copy source denied");
         require(QFileInfo(path).isDir(), "protected directory still exists");
     }
     require(!mayDeleteLocalEntry(root, trash, trash + "/../.kobo"), "trash traversal denied");

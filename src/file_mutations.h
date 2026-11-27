@@ -15,7 +15,8 @@ inline bool removeTreeNoFollow(const QString &root, const QString &path) {
     if (!safeLocalPath(root, path)) return false;
     if (!info.isDir()) return info.isFile() && QFile::remove(path);
     if (!QDir(path).isReadable()) return false;
-    const QFileInfoList items = browserEntries(QDir(path), true);
+    QFileInfoList items;
+    if (!operationEntries(path, items)) return false;
     bool ok = true;
     for (const QFileInfo &item : items)
         if (!removeTreeNoFollow(root, item.absoluteFilePath())) ok = false;
@@ -113,19 +114,10 @@ inline bool copyStagedContents(const QString &root, const QString &src, const QS
     if (fi.isDir()) {
         if (!QDir().mkdir(dst)) { error = QString::fromUtf8("Не удалось создать временную папку"); return false; }
         if (!QDir(src).isReadable()) { error = QString::fromUtf8("Не удалось прочитать папку"); return false; }
-        DIR *dir = ::opendir(QFile::encodeName(src).constData());
-        if (!dir) { error = QString::fromUtf8("Не удалось открыть папку"); return false; }
-        QStringList names;
-        errno = 0;
-        while (struct dirent *entry = ::readdir(dir)) {
-            const QString name = QFile::decodeName(entry->d_name);
-            if (name != QLatin1String(".") && name != QLatin1String("..")) names << name;
-        }
-        const int readError = errno;
-        ::closedir(dir);
-        if (readError) { error = QString::fromUtf8("Не удалось прочитать содержимое папки"); return false; }
-        for (const QString &name : names)
-            if (!copyStagedContents(root, src + QLatin1Char('/') + name, dst + QLatin1Char('/') + name, error, copyFile))
+        QFileInfoList children;
+        if (!operationEntries(src, children)) { error = QString::fromUtf8("Не удалось прочитать содержимое папки"); return false; }
+        for (const QFileInfo &child : children)
+            if (!copyStagedContents(root, child.absoluteFilePath(), dst + QLatin1Char('/') + child.fileName(), error, copyFile))
                 return false;
         return true;
     }
@@ -139,7 +131,9 @@ inline bool copyStagedTree(const QString &root, const QString &src, const QStrin
                            QString &error, CopyFileOperation copyFile = nullptr, bool allowAdds = false) {
     const QFileInfo source(src), target(dst);
     const QString parent = target.absolutePath();
-    if (!safeCopyTree(root, src) || !safeLocalPath(root, parent) || !QFileInfo(parent).isDir()
+    const QString trash = QDir::cleanPath(QFileInfo(root).absoluteFilePath()) + QLatin1String("/.kobrowse_trash");
+    if (readOnlyLocalEntry(root, trash, src, allowAdds) || !safeCopyTree(root, src)
+        || !safeLocalPath(root, parent) || !QFileInfo(parent).isDir()
         || !writableLocalDirectory(root, parent, allowAdds)
         || protectedLocalPath(root, dst, allowAdds)
         || !safeLocalPath(root, dst, true) || target.exists() || target.isSymLink()

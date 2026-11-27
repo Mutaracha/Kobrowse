@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <cerrno>
 
 // Qt on some Kobo firmware omits entries even with QDir::Hidden. Supplement
 // the Qt listing from readdir only when hidden items are requested. Never use
@@ -49,6 +50,29 @@ inline QFileInfoList completeBrowserEntries(const QDir &dir, const QFileInfoList
 
 inline QFileInfoList browserEntries(const QDir &dir, bool showHidden) {
     return completeBrowserEntries(dir, browserQtEntries(dir, showHidden), showHidden);
+}
+
+// Operations must not silently accept a partial listing. Browsing can fall
+// back to Qt's view, but copying, deletion and ZIP creation must fail closed
+// on opendir/readdir/closedir errors or names Qt cannot round-trip faithfully.
+inline bool operationEntries(const QString &path, QFileInfoList &entries) {
+    entries.clear();
+    DIR *dir = ::opendir(QFile::encodeName(path).constData());
+    if (!dir) return false;
+    bool ok = true;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = ::readdir(dir);
+        if (!entry) { if (errno) ok = false; break; }
+        const QByteArray raw(entry->d_name);
+        if (raw == "." || raw == "..") continue;
+        const QString name = QFile::decodeName(raw);
+        if (QFile::encodeName(name) != raw) { ok = false; break; }
+        entries.append(QFileInfo(QDir(path).filePath(name)));
+    }
+    if (::closedir(dir) != 0) ok = false;
+    if (!ok) entries.clear();
+    return ok;
 }
 
 inline bool pathWithin(const QString &path, const QString &base) {
@@ -123,7 +147,8 @@ inline bool safeCopyTree(const QString &root, const QString &path) {
     const QFileInfo info(path);
     if (info.isFile()) return true;
     if (!info.isDir() || !QDir(path).isReadable()) return false;
-    const QFileInfoList children = browserEntries(QDir(path), true);
+    QFileInfoList children;
+    if (!operationEntries(path, children)) return false;
     for (const QFileInfo &child : children)
         if (!safeCopyTree(root, child.absoluteFilePath())) return false;
     return true;

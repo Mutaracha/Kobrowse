@@ -1,4 +1,7 @@
+import os
 import pathlib
+import resource
+import signal
 import subprocess
 import sys
 import tempfile
@@ -53,6 +56,33 @@ class ZipTests(unittest.TestCase):
         self.dest.write_bytes(b'existing')
         self.run_archive(file, success=False)
         self.assertEqual(self.dest.read_bytes(), b'existing')
+
+    def test_unrepresentable_filename_is_not_silently_omitted(self):
+        folder = self.root / 'books'
+        folder.mkdir()
+        (folder / 'valid').write_bytes(b'keep')
+        raw = os.fsencode(folder) + b'/\xff'
+        fd = os.open(raw, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+        os.close(fd)
+        self.run_archive(folder, success=False)
+        self.assertFalse(self.dest.exists())
+        self.assertEqual((folder / 'valid').read_bytes(), b'keep')
+        self.assertTrue(os.path.exists(raw))
+
+    def test_write_failure_leaves_source_and_no_partial_archive(self):
+        source = self.root / 'data'
+        source.write_bytes(os.urandom(128 * 1024))
+
+        def limit_output():
+            signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1024, 1024))
+
+        result = subprocess.run([DRIVER, str(self.root), str(self.dest), str(source)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=limit_output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.dest.exists())
+        self.assertFalse(list(self.root.glob('.kobrowse_zip_*')))
+        self.assertEqual(source.stat().st_size, 128 * 1024)
 
     def test_missing_and_oversized_source_leave_no_archive(self):
         self.run_archive(self.root / 'missing', success=False)

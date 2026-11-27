@@ -66,7 +66,8 @@ public:
         entries.append(e);
         if (e.directory) {
             if (!QDir(path).isReadable()) return fail("Папка недоступна");
-            const QFileInfoList children = browserEntries(QDir(path), true);
+            QFileInfoList children;
+            if (!operationEntries(path, children)) return fail("Не удалось прочитать содержимое папки");
             for (const QFileInfo &child : children)
                 if (!add(child.absoluteFilePath(), name + QLatin1Char('/') + child.fileName())) return false;
         }
@@ -148,12 +149,20 @@ bool createZipArchive(const QString &root, const QString &destination,
     }
     QTemporaryFile temporary(dir + QLatin1String("/.kobrowse_zip_XXXXXX"));
     if (!temporary.open()) { error = QString::fromUtf8("Не удалось создать временный архив"); return false; }
+    const auto cleanup = [&temporary, &error]() {
+        const QString path = temporary.fileName();
+        if (!temporary.remove()) {
+            temporary.setAutoRemove(false);
+            error += QString::fromUtf8("; временный архив не удалось удалить: ") + path;
+        }
+        return false;
+    };
     Writer writer(root, temporary, error, allowAdds);
     for (const QString &src : sources)
-        if (!writer.add(src, QFileInfo(src).fileName())) return false;
-    if (!writer.finish()) return false;
+        if (!writer.add(src, QFileInfo(src).fileName())) return cleanup();
+    if (!writer.finish()) return cleanup();
     temporary.close();
-    if (!temporary.rename(destination)) { error = QString::fromUtf8("Не удалось сохранить архив"); return false; }
+    if (!temporary.rename(destination)) { error = QString::fromUtf8("Не удалось сохранить архив"); return cleanup(); }
     temporary.setAutoRemove(false);
     return true;
 }

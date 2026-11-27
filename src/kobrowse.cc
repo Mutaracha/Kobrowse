@@ -164,8 +164,9 @@ static void loadConfig() {
     {
         QFile f(ini);
         if (canUpdate && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            text = QString::fromUtf8(f.readAll());
-            if (f.error() != QFile::NoError) canUpdate = false;
+            const QByteArray bytes = f.readAll();
+            text = QString::fromUtf8(bytes);
+            if (f.error() != QFile::NoError || text.toUtf8() != bytes) canUpdate = false;
         } else if (QFileInfo(ini).exists() || QFileInfo(ini).isSymLink()) canUpdate = false;
     }
     QStringList lines = text.split(QLatin1Char('\n'));
@@ -242,12 +243,13 @@ static void loadConfig() {
     QSettings st(ini, QSettings::IniFormat);
     st.setIniCodec(QTextCodec::codecForName("UTF-8"));
     // число в пределах [lo, hi], иначе значение по умолчанию
-    auto num = [&st](const char *key, double def, double lo, double hi) {
+    auto num = [&st, canUpdate](const char *key, double def, double lo, double hi) {
+        if (!canUpdate) return def;
         bool ok = false;
         const double v = st.value(u8("kobrowse/") + u8(key)).toString().replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
         return (ok && v >= lo && v <= hi) ? v : def;
     };
-    OPEN_BOOKS  = st.value(u8("kobrowse/open_books")).toString().trimmed().toLower();
+    OPEN_BOOKS  = canUpdate ? st.value(u8("kobrowse/open_books")).toString().trimmed().toLower() : QString();
     LIST_PX     = ptToPx(num("list_pt", 8, 4, 24));
     // Fixed Kobo-proportional chrome; legacy appearance keys are preserved but ignored.
     const double uiScale = SCREEN_DPI / 300.0;
@@ -258,7 +260,7 @@ static void loadConfig() {
     KEY_FONT_SET = false; FUNC_FONT_SET = false;
     KEY_FONT_PX = 0; FUNC_PX = 0;
     SEARCH_LIST_PX = ptToPx(10); SEARCH_LIST_FONT.clear();
-    LIST_FONT   = st.value(u8("kobrowse/list_font")).toString().trimmed();
+    LIST_FONT   = canUpdate ? st.value(u8("kobrowse/list_font")).toString().trimmed() : QString();
     BTN_FONT.clear();
     SHOW_HIDDEN = num("show_hidden", 1, 0, 1) != 0;
     TRASH_ENABLED = num("trash_enabled", 1, 0, 1) != 0;
@@ -269,6 +271,7 @@ static void loadConfig() {
 static void klog(const QString &msg) {
     const QString app = u8(KOBROWSE_ROOT) + u8("/.adds/kobrowse");
     if (!safeLocalPath(u8(KOBROWSE_ROOT), app) || !QFileInfo(app).isDir()) return;
+    if (!safeLocalPath(u8(KOBROWSE_ROOT), u8(KOBROWSE_INI), true)) return;
     QSettings st(u8(KOBROWSE_INI), QSettings::IniFormat);
     if (!st.value(u8("kobrowse/logging_enabled"), 1).toBool()) return;
     const QString dir = QFileInfo(u8(KOBROWSE_LOG)).absolutePath();
@@ -1763,8 +1766,9 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
     {
         QFile f(ini);
         if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            text = QString::fromUtf8(f.readAll());
-            if (f.error() != QFile::NoError) return false;
+            const QByteArray bytes = f.readAll();
+            text = QString::fromUtf8(bytes);
+            if (f.error() != QFile::NoError || text.toUtf8() != bytes) return false;
         } else if (QFileInfo(ini).exists() || QFileInfo(ini).isSymLink()) return false;
     }
     QStringList lines = text.split(QLatin1Char('\n'));
@@ -2602,7 +2606,7 @@ private:
     void toClipboard(bool cut) {
         QStringList list;
         for (const QString &p : m_marked) {
-            if (!safeLocalPath(m_root, p) || (cut && isProtected(p))) continue;
+            if (!safeLocalPath(m_root, p) || (cut ? isProtected(p) : readOnlyLocalEntry(m_root, m_trash, p, ALLOW_ADDS))) continue;
             list << p;
         }
         const bool skipped = list.size() < m_marked.size();
@@ -2623,7 +2627,7 @@ private:
         int done = 0;
         for (const QString &src : m_clip) {
             const QFileInfo fi(src);
-            if (!safeLocalPath(m_root, src) || (m_clipCut && isProtected(src))) {
+            if (!safeLocalPath(m_root, src) || (m_clipCut ? isProtected(src) : readOnlyLocalEntry(m_root, m_trash, src, ALLOW_ADDS))) {
                 err = u8("Недоступный или защищённый путь: ") + fi.fileName();
                 remaining << src; continue;
             }
@@ -2750,7 +2754,11 @@ private:
             if (!safeLocalPath(m_root, m_trash) || !QFileInfo(m_trash).isDir()) {
                 showMessage(u8("Корзина недоступна или пуста")); return;
             }
-            for (const QFileInfo &item : browserEntries(QDir(m_trash), true)) paths << item.absoluteFilePath();
+            QFileInfoList entries;
+            if (!operationEntries(m_trash, entries)) {
+                showMessage(u8("Не удалось прочитать содержимое корзины")); return;
+            }
+            for (const QFileInfo &item : entries) paths << item.absoluteFilePath();
         } else paths = m_deleteSnapshot;
         QSet<QString> failed;
         for (const QString &path : paths) {
@@ -3313,12 +3321,14 @@ private:
         if (on) {
             m_resetHomeDraft = false;
             updateHomeDraft();
+            const bool configSafe = safeLocalPath(m_root, u8(KOBROWSE_INI), true);
             QSettings st(u8(KOBROWSE_INI), QSettings::IniFormat);
             st.setIniCodec(QTextCodec::codecForName("UTF-8"));
             m_setVals.clear();
             for (int i = 0; i < SET_COUNT; ++i) {
-                QString v = st.value(u8("kobrowse/") + u8(SET_ITEMS[i].key),
-                                     cfgDefault(u8(SET_ITEMS[i].key))).toString().trimmed();
+                QString v = configSafe ? st.value(u8("kobrowse/") + u8(SET_ITEMS[i].key),
+                                                  cfgDefault(u8(SET_ITEMS[i].key))).toString().trimmed()
+                                       : cfgDefault(u8(SET_ITEMS[i].key));
                 // Числовое значение из старого ini могло выйти за новые пределы
                 if (SET_ITEMS[i].type == S_NUM) {
                     bool ok = false;
@@ -3448,7 +3458,7 @@ private:
             refreshSettings(); updateHomeDraft(); showMessage(u8("Не удалось записать kobrowse.ini")); return;
         }
         m_initialSetVals = m_setVals;
-        const bool homeResetFailed = m_resetHomeDraft && !resetHomeFolder(u8(KOBROWSE_HOME));
+        const bool homeResetFailed = m_resetHomeDraft && !resetHomeFolder(m_root, u8(KOBROWSE_HOME));
         loadConfig();
         m_showHidden = SHOW_HIDDEN;
         m_holdTimer.setInterval(LONG_TAP_MS);
