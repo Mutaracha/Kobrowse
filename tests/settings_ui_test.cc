@@ -46,8 +46,9 @@ class SettingsUiTest {
     }
     static void testBrightness(KobrowseWindow &w) {
         FakeBrightness fake; w.m_brightnessBackend = &fake;
-        const QPoint start = w.m_list->viewport()->mapTo(&w, QPoint(5, w.m_list->viewport()->height() / 2));
-        require(w.inList(start) && start.x() < w.width() * .13, "test starts at left list edge");
+        QPoint start = w.m_list->viewport()->mapTo(&w, QPoint(5, w.m_list->viewport()->height() / 2));
+        start.setX(1);
+        require(start.x() < w.width() * .13, "test starts at physical left edge");
         const int page = w.m_pageIndex;
         touch(w, QEvent::TouchBegin, start);
         touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
@@ -82,6 +83,12 @@ class SettingsUiTest {
         touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
         require(fake.cancels == 3 && fake.saves == 1 && fake.level == saved, "write failure cancels");
         fake.fail = false;
+        const int beforeToolbar = fake.begins;
+        const QPoint toolbarPoint(1, w.m_toolbar->mapTo(&w, QPoint(0, 0)).y() + 5);
+        touch(w, QEvent::TouchBegin, toolbarPoint);
+        touch(w, QEvent::TouchUpdate, toolbarPoint + QPoint(0, 100));
+        touch(w, QEvent::TouchCancel, toolbarPoint, 0);
+        require(fake.begins == beforeToolbar, "toolbar drag does not control brightness");
         touch(w, QEvent::TouchBegin, start);
         touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
         QEvent deactivate(QEvent::ApplicationDeactivate); w.eventFilter(qApp, &deactivate);

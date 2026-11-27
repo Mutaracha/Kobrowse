@@ -2073,9 +2073,15 @@ protected:
         case QEvent::TouchBegin:
             cancelBrightness();
             m_brightnessConsumed = false;
-            m_brightnessGesture.begin(p, size(), pts.size() == 1 && inList(p)
-                && !m_settings->isVisible() && !m_actions->isVisible()
-                && !m_confirm->isVisible() && !m_fontPicker->isVisible());
+            // Include the margin between the viewport and the physical edge.
+            // The vertical bounds keep toolbar and footer controls untouched.
+            {
+                const QRect listRect(m_list->viewport()->mapTo(this, QPoint(0, 0)), m_list->viewport()->size());
+                m_brightnessGesture.begin(p, size(), pts.size() == 1
+                    && p.y() >= listRect.top() && p.y() <= listRect.bottom()
+                    && !m_settings->isVisible() && !m_actions->isVisible()
+                    && !m_confirm->isVisible() && !m_fontPicker->isVisible());
+            }
             m_press.start();
             m_pressPos = p;
             m_moved = false;
