@@ -3074,10 +3074,17 @@ private:
                 if (settingGroup(u8(SET_ITEMS[i].key)) != group) continue;
                 QWidget *line = new QWidget(body);
                 line->setMinimumHeight(rowH);
-                QHBoxLayout *r = new QHBoxLayout(line);
+                QHBoxLayout *r = new QHBoxLayout();
                 r->setContentsMargins(0, 0, 0, 0); r->setSpacing(qMax(4, qRound(10 * sc)));
                 QLabel *name = new QLabel(u8(SET_ITEMS[i].label), line);
-                name->setFont(fText); name->setWordWrap(true); r->addWidget(name, 1);
+                name->setFont(fText); name->setWordWrap(true);
+                if (isFontSizeSetting(u8(SET_ITEMS[i].key))) {
+                    QVBoxLayout *stack = new QVBoxLayout(line);
+                    stack->setContentsMargins(0, 0, 0, 0); stack->setSpacing(qMax(4, qRound(8 * sc)));
+                    stack->addWidget(name); stack->addLayout(r);
+                } else {
+                    line->setLayout(r); r->addWidget(name, 1);
+                }
                 QLabel *val = nullptr;
                 SettingSwitch *toggle = nullptr;
                 if (SET_ITEMS[i].type == S_BOOL) {
