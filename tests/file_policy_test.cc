@@ -3,6 +3,7 @@
 #include "../src/pagination.h"
 #include "../src/home_folder.h"
 #include "../src/file_kind.h"
+#include "../src/zip_path_manifest.h"
 #include <QCoreApplication>
 #include <QFile>
 #include <QTemporaryDir>
@@ -29,6 +30,27 @@ static bool contains(const QFileInfoList &entries, const QString &name) {
 }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
+    QString zipError;
+    ZipPathManifest manifest;
+    require(manifest.add("books/book.epub", false, false, zipError), "zip normal nested name");
+    require(manifest.add("books/", false, true, zipError), "zip explicit parent after child");
+    require(!manifest.add("books/", false, true, zipError), "zip duplicate directory rejected");
+    require(!manifest.add("Books/other", false, false, zipError), "zip case alias rejected");
+    require(!manifest.add("books/book.epub/nested", false, false, zipError), "zip file as parent rejected");
+    require(!manifest.add("books/book.epub", false, false, zipError), "zip duplicate file rejected");
+    require(manifest.add(QString::fromUtf8("книги/текст.txt").toUtf8(), true, false, zipError), "zip UTF-8 supported");
+    require(!manifest.add(QString::fromUtf8("другое.txt").toUtf8(), false, false, zipError), "zip unflagged non-ASCII rejected");
+    const char *badNames[] = { "../escape", "/absolute", "dir/../bad", "a//b", "a\\\\b", "C:drive", ".kobo/file", ".ADDS/x", ".kobrowse_trash/x", "con.txt", "AUX", "lpt1.log", "trailing.", "trailing ", "wild?", "file/" };
+    for (const char *name : badNames) {
+        ZipPathManifest rejected;
+        require(!rejected.add(QByteArray(name), true, false, zipError), "unsafe zip path rejected");
+    }
+    ZipPathManifest normalization;
+    require(normalization.add(QString::fromUtf8("é.txt").toUtf8(), true, false, zipError), "zip composed unicode");
+    require(!normalization.add(QString::fromUtf8("é.txt").toUtf8(), true, false, zipError), "zip canonical collision rejected");
+    ZipPathManifest malformed;
+    require(!malformed.add(QByteArray("\\xff", 1), true, false, zipError), "invalid UTF-8 rejected");
+    require(!malformed.add(QByteArray("a\\0b", 3), true, false, zipError), "NUL rejected");
     require(fileKind("Книга.KEPUB.EPUB") == FileBook && fileKind("read.PDF") == FileBook, "book icons");
     require(fileKind("picture.TIFF") == FileImage && fileKind("photo.JPEG") == FileImage, "image icons");
     require(fileKind("book.fb2.zip") == FileArchive && fileKind("comic.CBR") == FileArchive, "archive icons");
