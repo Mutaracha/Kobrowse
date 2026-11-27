@@ -71,6 +71,7 @@
 #include "footer_notice.h"
 #include "device_status.h"
 #include "setting_slider.h"
+#include "brightness.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -1779,8 +1780,10 @@ public:
     // диалоги Nickel (USB, питание) — отдельные окна и остаются сверху
     explicit KobrowseWindow(QWidget *parent)
         : QWidget(parent),
-          m_root(u8(KOBROWSE_ROOT)), m_trash(u8(KOBROWSE_TRASH)), m_path(m_root), m_showHidden(SHOW_HIDDEN)
+          m_root(u8(KOBROWSE_ROOT)), m_trash(u8(KOBROWSE_TRASH)), m_path(m_root), m_showHidden(SHOW_HIDDEN),
+          m_nativeBrightness(this)
     {
+        m_brightnessBackend = &m_nativeBrightness;
         m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME));
         setAttribute(Qt::WA_DeleteOnClose);     // при закрытии окно удаляется из памяти
         setAttribute(Qt::WA_AcceptTouchEvents); // Nickel шлёт касания как QTouchEvent, не как мышь
@@ -2021,7 +2024,7 @@ public:
         qApp->installEventFilter(this);
     }
 
-    ~KobrowseWindow() { qApp->removeEventFilter(this); }
+    ~KobrowseWindow() { cancelBrightness(); qApp->removeEventFilter(this); }
 
 protected:
     // Касания обрабатываем сами: TouchBegin нужно принять, иначе TouchEnd не придёт.
@@ -2041,6 +2044,7 @@ protected:
     // (скрытие ряда кнопок, перестройка списка), касание внутри окна попадёт сюда.
     bool eventFilter(QObject *obj, QEvent *e) override {
         const QEvent::Type t = e->type();
+        if (t == QEvent::ApplicationDeactivate) cancelBrightness();
         if (m_list && obj == m_list->viewport() && t == QEvent::Resize) m_pageTimer.start(0);
         if (!(t == QEvent::TouchBegin || t == QEvent::TouchUpdate || t == QEvent::TouchEnd
               || t == QEvent::TouchCancel) || obj == this || !obj->isWidgetType())
@@ -2067,6 +2071,11 @@ protected:
         const QPoint p = pts.isEmpty() ? QPoint() : mapFromGlobal(pts.first().screenPos().toPoint());
         switch (t) {
         case QEvent::TouchBegin:
+            cancelBrightness();
+            m_brightnessConsumed = false;
+            m_brightnessGesture.begin(p, size(), pts.size() == 1 && inList(p)
+                && !m_settings->isVisible() && !m_actions->isVisible()
+                && !m_confirm->isVisible() && !m_fontPicker->isVisible());
             m_press.start();
             m_pressPos = p;
             m_moved = false;
@@ -2112,6 +2121,23 @@ protected:
             }
             break;
         case QEvent::TouchUpdate:
+            if (m_brightnessConsumed) {
+                if (pts.size() != 1) cancelBrightness();
+                else if (m_brightnessTracking) updateBrightness(p);
+                break;
+            }
+            if (pts.size() != 1 || m_holdFired) m_brightnessGesture.cancel();
+            else if (m_brightnessGesture.move(p)) {
+                m_brightnessConsumed = true; m_moved = true;
+                m_holdTimer.stop(); m_holdPath.clear(); m_swipeList = false;
+                if (m_brightnessBackend->begin()) {
+                    m_brightnessTracking = true; updateBrightness(p);
+                } else {
+                    m_brightnessGesture.cancel();
+                    showMessage(u8("Регулировка яркости недоступна на этой прошивке"));
+                }
+                break;
+            }
             if (m_activeSlider) {
                 if (pts.size() != 1) { m_activeSlider->cancel(); m_activeSlider = nullptr; m_moved = true; }
                 else m_activeSlider->move(m_activeSlider->mapFrom(this, p).x());
@@ -2152,6 +2178,17 @@ protected:
             }
             break;
         case QEvent::TouchEnd: {
+            if (m_brightnessConsumed) {
+                if (m_brightnessTracking && !pts.isEmpty()) updateBrightness(p);
+                if (m_brightnessTracking) {
+                    if (!m_brightnessBackend->finish(true)) showMessage(u8("Не удалось завершить изменение яркости"));
+                    m_brightnessTracking = false;
+                }
+                m_brightnessGesture.cancel(); m_brightnessConsumed = false;
+                m_holdTimer.stop(); m_holdPath.clear(); m_twoFinger = false;
+                break;
+            }
+            m_brightnessGesture.cancel();
             if (m_activeSlider) {
                 if (!pts.isEmpty()) m_activeSlider->move(m_activeSlider->mapFrom(this, p).x());
                 m_activeSlider->finish(); m_activeSlider = nullptr;
@@ -2171,6 +2208,7 @@ protected:
             break;
         }
         default:              // TouchCancel
+            cancelBrightness(); m_brightnessConsumed = false;
             if (m_activeSlider) { m_activeSlider->cancel(); m_activeSlider = nullptr; }
             m_holdTimer.stop(); m_holdPath.clear();
             m_twoFinger = false;
@@ -2194,8 +2232,30 @@ protected:
         QWidget::showEvent(e);
         m_pageTimer.start(0);
     }
+    void hideEvent(QHideEvent *e) override {
+        cancelBrightness();
+        QWidget::hideEvent(e);
+    }
 
 private:
+    void cancelBrightness() {
+        if (m_brightnessTracking) {
+            const bool restored = m_brightnessBackend->finish(false);
+            m_brightnessTracking = false;
+            if (!restored) klog(u8("brightness: could not restore cancelled gesture"));
+        }
+        m_brightnessGesture.cancel();
+    }
+    void updateBrightness(const QPoint &point) {
+        const int desired = qBound(0, m_brightnessBackend->startLevel() + m_brightnessGesture.change(point), 100);
+        const int actual = m_brightnessBackend->setLevel(desired);
+        if (actual < 0) {
+            cancelBrightness();
+            showMessage(u8("Не удалось изменить яркость"));
+            return;
+        }
+        showMessage(u8("Яркость: %1%").arg(actual));
+    }
     bool inList(const QPoint &p) const {
         QWidget *w = childAt(p);
         return w && (w == m_list->viewport() || m_list->viewport()->isAncestorOf(w));
@@ -2390,15 +2450,16 @@ private:
         QList<ActionMenuEntry> entries;
         const bool selected = !m_marked.isEmpty();
         if (selected) {
+            if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
+                entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row)
+                        << ActionMenuEntry(QString(), 0, separator, false);
             entries << ActionMenuEntry(u8("Вырезать"), ActCut, row)
                     << ActionMenuEntry(u8("Копировать"), ActCopy, row);
         }
         if (!m_clip.isEmpty()) entries << ActionMenuEntry(u8("Вставить"), ActPaste, row);
         if (selected) {
-            entries << ActionMenuEntry(QString(), 0, separator, false);
-            if (m_marked.size() == 1 && validHomeFolder(m_root, *m_marked.begin()))
-                entries << ActionMenuEntry(u8("Сделать домашней"), ActHome, row);
-            entries << ActionMenuEntry(u8("Архивировать"), ActZip, row)
+            entries << ActionMenuEntry(QString(), 0, separator, false)
+                    << ActionMenuEntry(u8("Архивировать"), ActZip, row)
                     << ActionMenuEntry(u8("Удалить"), ActDelete, row);
             if (m_marked.size() == 1) entries << ActionMenuEntry(u8("Переименовать"), ActRename, row);
         }
@@ -3274,6 +3335,10 @@ private:
     RowDelegate *m_fileDelegate = nullptr;
     QFrame *m_footerLine = nullptr;
     bool          m_showHidden;
+    NativeBrightness m_nativeBrightness;
+    BrightnessBackend *m_brightnessBackend = nullptr;
+    BrightnessGesture m_brightnessGesture;
+    bool m_brightnessTracking = false, m_brightnessConsumed = false;
     bool          m_rootDiagLogged = false;
     int           m_logLeft = LOG_EVENTS;
     QTimer        m_msgTimer, m_ensure, m_setGeom, m_holdTimer, m_pageTimer;

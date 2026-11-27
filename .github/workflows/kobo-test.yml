@@ -40,6 +40,8 @@ jobs:
         run: bash tests/run-pagination-ui-tests.sh
       - name: Test settings window and drafts (offscreen)
         run: bash tests/run-settings-ui-tests.sh
+      - name: Test brightness gesture and mock native backend (offscreen)
+        run: bash tests/run-brightness-tests.sh
       - name: Test ZIP creation
         run: bash tests/run-zip-tests.sh
       - name: Test package checks

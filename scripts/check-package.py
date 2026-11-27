@@ -7,6 +7,7 @@ EXPECTED = {
     'usr/local/Kobo/imageformats/libkobrowse.so',
     'mnt/onboard/.adds/nm/kobrowse',
     'mnt/onboard/.adds/kobrowse/uninstall',
+    'mnt/onboard/.adds/kobrowse/KOBALT-LICENSE.txt',
 }
 
 
@@ -29,6 +30,9 @@ def check(path):
             elif name.endswith('/nm/kobrowse'):
                 if b'touch /tmp/kobrowse.open' not in data:
                     raise ValueError('missing NickelMenu entry')
+            elif name.endswith('/KOBALT-LICENSE.txt'):
+                if b'MIT License' not in data or b'Copyright (c) 2026 Nico Verbruggen' not in data:
+                    raise ValueError('missing Kobalt license notice')
             elif not data:
                 raise ValueError('empty uninstall marker')
 

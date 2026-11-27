@@ -3,7 +3,21 @@
 #include "../src/kobrowse.cc"
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QTouchDevice>
 #include <cstdlib>
+
+class FakeBrightness : public BrightnessBackend {
+public:
+    int level = 40, original = -1, begins = 0, saves = 0, cancels = 0;
+    bool available = true, fail = false;
+    bool begin() override { ++begins; if (!available) return false; original = level; return true; }
+    int startLevel() const override { return original; }
+    int setLevel(int value) override { if (fail) return -1; return level = qBound(0, value, 100); }
+    bool finish(bool save) override {
+        if (save) ++saves; else { ++cancels; level = original; }
+        original = -1; return true;
+    }
+};
 
 extern "C" void nh_log(const char *, ...) {}
 extern "C" void nh_dump_log() {}
@@ -17,6 +31,64 @@ static int row(const char *key) {
     require(false, "setting exists"); return -1;
 }
 class SettingsUiTest {
+    static void touch(KobrowseWindow &w, QEvent::Type type, const QPoint &point, int count = 1) {
+        QTouchDevice device; device.setType(QTouchDevice::TouchScreen);
+        Qt::TouchPointState state = type == QEvent::TouchBegin ? Qt::TouchPointPressed
+            : type == QEvent::TouchEnd ? Qt::TouchPointReleased : Qt::TouchPointMoved;
+        QList<QTouchEvent::TouchPoint> points;
+        for (int i = 0; i < count; ++i) {
+            QTouchEvent::TouchPoint pt(i); pt.setState(state);
+            pt.setScreenPos(w.mapToGlobal(point + QPoint(i * 20, 0)));
+            points << pt;
+        }
+        QTouchEvent event(type, &device, Qt::NoModifier, state, points);
+        w.handleTouch(&event);
+    }
+    static void testBrightness(KobrowseWindow &w) {
+        FakeBrightness fake; w.m_brightnessBackend = &fake;
+        const QPoint start = w.m_list->viewport()->mapTo(&w, QPoint(5, w.m_list->viewport()->height() / 2));
+        require(w.inList(start) && start.x() < w.width() * .13, "test starts at left list edge");
+        const int page = w.m_pageIndex;
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
+        require(fake.begins == 1 && fake.level > 40 && w.m_brightnessTracking, "edge drag adjusts brightness");
+        touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
+        require(fake.saves == 1 && w.m_pageIndex == page && !w.m_brightnessTracking, "release saves without turning page");
+        const int saved = fake.level;
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start + QPoint(0, 100));
+        touch(w, QEvent::TouchCancel, start, 0);
+        require(fake.cancels == 1 && fake.level == saved, "touch cancel restores brightness");
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100), 2);
+        touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
+        require(fake.cancels == 2 && fake.level == saved && fake.saves == 1 && w.m_pageIndex == page,
+                "second finger cancels without page turn or save");
+        const int begins = fake.begins;
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start + QPoint(80, 0));
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 120));
+        touch(w, QEvent::TouchCancel, start, 0);
+        require(fake.begins == begins, "horizontal intent does not alter brightness");
+        fake.available = false;
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
+        touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
+        require(fake.saves == 1 && w.m_pageIndex == page, "unavailable light does not turn page");
+        fake.available = true; fake.fail = true;
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
+        touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
+        require(fake.cancels == 3 && fake.saves == 1 && fake.level == saved, "write failure cancels");
+        fake.fail = false;
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
+        QEvent deactivate(QEvent::ApplicationDeactivate); w.eventFilter(qApp, &deactivate);
+        touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
+        require(fake.cancels == 4 && fake.saves == 1 && fake.level == saved, "deactivation cancels");
+        w.m_brightnessBackend = &w.m_nativeBrightness;
+    }
 public:
     static void run(KobrowseWindow &w, const QString &homeFile) {
         w.resize(768, 1024); w.show(); QApplication::processEvents();
@@ -24,18 +96,24 @@ public:
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
         require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");
-        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut
-            && w.m_actions->topLevelItem(1)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCopy
-            && !(w.m_actions->topLevelItem(2)->flags() & Qt::ItemIsEnabled)
-            && w.m_actions->topLevelItem(3)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
-            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActZip,
-            "home action follows first separator");
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
+            && !(w.m_actions->topLevelItem(1)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(2)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut
+            && w.m_actions->topLevelItem(3)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCopy
+            && !(w.m_actions->topLevelItem(4)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(5)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActZip,
+            "home action is first and separated from cut");
         w.m_clip = QStringList() << (w.m_root + "/.adds/archive-source"); w.updateActions();
-        require(w.m_actions->topLevelItem(2)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActPaste
-            && !(w.m_actions->topLevelItem(3)->flags() & Qt::ItemIsEnabled)
-            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome,
-            "home follows separator with clipboard");
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActHome
+            && !(w.m_actions->topLevelItem(1)->flags() & Qt::ItemIsEnabled)
+            && w.m_actions->topLevelItem(4)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActPaste
+            && !(w.m_actions->topLevelItem(5)->flags() & Qt::ItemIsEnabled),
+            "home remains first with clipboard");
+        w.m_marked.insert(w.m_root + "/.adds/archive-source"); w.updateActions();
+        require(w.m_actions->topLevelItem(0)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActCut,
+            "no home or extra leading separator for multiple selections");
         w.m_clip.clear(); w.clearSelection();
+        testBrightness(w);
         w.showSettings(true); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings fit screen");
         const int font = row("list_pt"), family = row("list_font"), hold = row("long_tap_ms");

@@ -46,13 +46,15 @@ class PackageTest(unittest.TestCase):
         plugin = './usr/local/Kobo/imageformats/libkobrowse.so'
         menu = './mnt/onboard/.adds/nm/kobrowse'
         marker = './mnt/onboard/.adds/kobrowse/uninstall'
-        cases = ('extra', 'fat_fixture', 'missing', 'missing_marker', 'empty_marker', 'duplicate', 'symlink', 'mode', 'owner',
+        license_file = './mnt/onboard/.adds/kobrowse/KOBALT-LICENSE.txt'
+        license_text = (ROOT / 'res/KOBALT-LICENSE.txt').read_bytes()
+        cases = ('extra', 'fat_fixture', 'missing', 'missing_marker', 'empty_marker', 'missing_license', 'bad_license', 'duplicate', 'symlink', 'mode', 'owner',
                  'wrong_binary', 'wrong_arch', 'wrong_menu')
         for case in cases:
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 path = pathlib.Path(tmp) / 'bad.tgz'
                 with tarfile.open(path, 'w:gz') as archive:
-                    files = [(plugin, ARM_SO), (menu, b'touch /tmp/kobrowse.open'), (marker, b'remove to uninstall')]
+                    files = [(plugin, ARM_SO), (menu, b'touch /tmp/kobrowse.open'), (marker, b'remove to uninstall'), (license_file, license_text)]
                     if case == 'extra':
                         files.append(('./unexpected', b'x'))
                     elif case == 'fat_fixture':
@@ -60,9 +62,13 @@ class PackageTest(unittest.TestCase):
                     elif case == 'missing':
                         files.pop(1)
                     elif case == 'missing_marker':
-                        files.pop()
+                        files.pop(2)
                     elif case == 'empty_marker':
                         files[2] = (marker, b'')
+                    elif case == 'missing_license':
+                        files.pop(3)
+                    elif case == 'bad_license':
+                        files[3] = (license_file, b'not a license')
                     elif case == 'duplicate':
                         files.append((menu[2:], b'touch /tmp/kobrowse.open'))
                     elif case == 'wrong_binary':
