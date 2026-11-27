@@ -225,6 +225,8 @@ public:
         require(build && build->text().contains("local") && build->font().pixelSize() == clock->font().pixelSize(), "build identity in status row");
         QLabel *free = w.m_deviceStatus->findChild<QLabel *>("statusFree");
         require(free && !free->text().contains("--") && free->font().pixelSize() == clock->font().pixelSize(), "available storage in status row");
+        DeviceStatusBar missing(nullptr, w.m_root + "/missing-power", w.m_root + "/missing-storage");
+        require(missing.findChild<QLabel *>("statusFree")->text().contains("--"), "unavailable storage reported without bogus value");
         require(clock->font().family() == batteryLabel->font().family() && build->font().family() == clock->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
         require(w.m_actions->font().pixelSize() == w.m_list->font().pixelSize()
@@ -280,6 +282,14 @@ public:
             if (w.m_actions->topLevelItem(n)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActMkdir
                 && (w.m_actions->topLevelItem(n)->flags() & Qt::ItemIsEnabled)) mkdirShown = true;
         require(mkdirShown, "empty selection menu offers create folder"); w.clearSelection();
+        const QPoint blank = w.m_list->viewport()->mapTo(&w, QPoint(w.m_list->viewport()->width() - 8, w.m_list->viewport()->height() - 8));
+        if (!w.m_list->itemAt(w.m_list->viewport()->mapFrom(&w, blank))) {
+            touch(w, QEvent::TouchBegin, blank);
+            require(w.m_holdBlank && w.m_holdTimer.isActive(), "long press on blank works without clipboard");
+            w.m_holdTimer.stop(); QMetaObject::invokeMethod(&w.m_holdTimer, "timeout", Qt::DirectConnection);
+            require(w.m_actions->isVisible(), "blank long press opens action menu");
+            touch(w, QEvent::TouchEnd, blank); w.clearSelection();
+        }
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
         require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");

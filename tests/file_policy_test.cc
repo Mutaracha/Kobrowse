@@ -10,6 +10,7 @@
 #include <QTextStream>
 #include <unistd.h>
 #include <fcntl.h>
+#include <utime.h>
 #include <cstdlib>
 
 static void require(bool condition, const char *message) {
@@ -99,6 +100,14 @@ int main(int argc, char **argv) {
     require(!createLocalDirectory(root, root, ".kobo", createError), "protected destination rejected");
     QFileInfoList sorted;
     sorted << QFileInfo(root + "/Books/book.epub") << QFileInfo(root + "/Books/Новая папка") << QFileInfo(root + "/.adds/app/file");
+    struct utimbuf older = { 1000000000, 1000000000 }, newer = { 1100000000, 1100000000 };
+    require(::utime(QFile::encodeName(root + "/Books/book.epub").constData(), &older) == 0
+            && ::utime(QFile::encodeName(root + "/.adds/app/file").constData(), &newer) == 0, "set date fixtures");
+    sorted.clear(); sorted << QFileInfo(root + "/Books/book.epub") << QFileInfo(root + "/Books/Новая папка") << QFileInfo(root + "/.adds/app/file");
+    sortBrowserEntries(sorted, SortDate, true);
+    require(sorted.first().isDir() && sorted.at(1).fileName() == "book.epub", "date sort ascending");
+    sortBrowserEntries(sorted, SortDate, false);
+    require(sorted.first().isDir() && sorted.at(1).fileName() == "file", "date sort descending");
     sortBrowserEntries(sorted, SortName, false);
     require(sorted.first().isDir(), "directories first even descending");
     sortBrowserEntries(sorted, SortSize, true);
