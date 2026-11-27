@@ -400,18 +400,36 @@ public:
         const int sz = iconSize();
         const QRectF r(opt.rect.left() + PAD_H, opt.rect.top() + PAD_V, sz, sz);
         if (idx.data(ROLE_DIR).toBool()) {
-            QPainterPath folder;
-            folder.moveTo(r.left(), r.top() + sz * .25);
-            folder.lineTo(r.left(), r.top() + sz * .12);
-            folder.lineTo(r.left() + sz * .38, r.top() + sz * .12);
-            folder.lineTo(r.left() + sz * .48, r.top() + sz * .25);
-            folder.lineTo(r.right(), r.top() + sz * .25);
-            folder.lineTo(r.right(), r.bottom() - sz * .1);
-            folder.lineTo(r.left(), r.bottom() - sz * .1);
-            folder.closeSubpath();
-            p->setBrush(p->pen().color());
-            p->drawPath(folder);
-            p->setBrush(Qt::NoBrush);
+            // Two overlapping folders: outlined back and filled front.
+            p->setRenderHint(QPainter::Antialiasing, true);
+            QPen outline = p->pen(); outline.setWidthF(qMax(1.0, sz * .035));
+            outline.setJoinStyle(Qt::RoundJoin); outline.setCapStyle(Qt::RoundCap);
+            p->setPen(outline);
+            QPainterPath rear;
+            rear.moveTo(r.left() + sz * .16, r.top() + sz * .25);
+            rear.lineTo(r.left() + sz * .16, r.top() + sz * .14);
+            rear.quadTo(r.left() + sz * .16, r.top() + sz * .11, r.left() + sz * .20, r.top() + sz * .11);
+            rear.lineTo(r.left() + sz * .46, r.top() + sz * .11);
+            rear.quadTo(r.left() + sz * .49, r.top() + sz * .11, r.left() + sz * .52, r.top() + sz * .19);
+            rear.lineTo(r.left() + sz * .94, r.top() + sz * .19);
+            rear.quadTo(r.left() + sz * .97, r.top() + sz * .19, r.left() + sz * .97, r.top() + sz * .22);
+            rear.lineTo(r.left() + sz * .97, r.top() + sz * .80);
+            rear.lineTo(r.left() + sz * .87, r.top() + sz * .80);
+            p->drawPath(rear);
+            QPainterPath front;
+            front.moveTo(r.left() + sz * .09, r.top() + sz * .24);
+            front.quadTo(r.left() + sz * .09, r.top() + sz * .20, r.left() + sz * .13, r.top() + sz * .20);
+            front.lineTo(r.left() + sz * .37, r.top() + sz * .20);
+            front.quadTo(r.left() + sz * .40, r.top() + sz * .20, r.left() + sz * .43, r.top() + sz * .28);
+            front.lineTo(r.left() + sz * .86, r.top() + sz * .28);
+            front.quadTo(r.left() + sz * .89, r.top() + sz * .28, r.left() + sz * .89, r.top() + sz * .31);
+            front.lineTo(r.left() + sz * .89, r.top() + sz * .86);
+            front.quadTo(r.left() + sz * .89, r.top() + sz * .89, r.left() + sz * .86, r.top() + sz * .89);
+            front.lineTo(r.left() + sz * .12, r.top() + sz * .89);
+            front.quadTo(r.left() + sz * .09, r.top() + sz * .89, r.left() + sz * .09, r.top() + sz * .86);
+            front.closeSubpath();
+            p->setBrush(outline.color()); p->drawPath(front); p->setBrush(Qt::NoBrush);
+            p->setRenderHint(QPainter::Antialiasing, false);
         } else {
             const QRectF box = r.adjusted(sz * .03, sz * .07, -sz * .03, -sz * .07);
             const int kind = idx.data(ROLE_KIND).toInt();
@@ -497,15 +515,21 @@ public:
                               || QFontMetrics(dateFont).width(dateLines.value(1)) > dateRect.width()))
             dateFont.setPixelSize(--datePx);
         p->setFont(dateFont);
+        p->setPen(mark ? QColor(Qt::white) : QColor(80, 80, 80));
         p->drawText(dateRect, Qt::AlignVCenter | Qt::AlignLeft, date);
         QFont sizeFont = detailFont(); int sizePx = sizeFont.pixelSize();
         const QString size = idx.data(ROLE_SIZE).toString();
         while (sizePx > 10 && QFontMetrics(sizeFont).width(size) > sizeRect.width()) sizeFont.setPixelSize(--sizePx);
         p->setFont(sizeFont);
+        p->setPen(ink);
         p->drawText(sizeRect, Qt::AlignVCenter | Qt::AlignRight,
                     QFontMetrics(sizeFont).elidedText(size, Qt::ElideRight, sizeRect.width()));
         if (!mark) {
-            p->setPen(QPen(Qt::black, qMax(1, qRound(1.5 * SCREEN_DPI / 300.0))));
+            const bool parentRow = idx.data(ROLE_PARENT).toBool();
+            QPen separator(parentRow ? QColor(Qt::black) : QColor(150, 150, 150),
+                           qMax(1, qRound(1.5 * SCREEN_DPI / 300.0)),
+                           parentRow ? Qt::DashLine : Qt::SolidLine, Qt::FlatCap);
+            p->setPen(separator);
             p->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
         }
         p->restore();
@@ -593,10 +617,25 @@ static void drawIcon(QPainter *p, Icon ic, const QRectF &r, const QColor &c) {
         house.lineTo(4, 22); house.lineTo(4, 11); house.closeSubpath(); p->drawPath(house);
         break;
     }
-    case I_SEARCH:
-        p->drawEllipse(QPointF(10, 10), 6, 6);
-        p->drawLine(QPointF(14.5, 14.5), QPointF(20, 20));
+    case I_SEARCH: { // Lens with a curved inner reflection and outlined grip.
+        p->setPen(QPen(c, 0.9, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        QPainterPath lens;
+        lens.moveTo(16.2, 13.9);
+        lens.cubicTo(18.7, 10.7, 17.8, 5.9, 14.9, 3.5);
+        lens.cubicTo(11.8, .9, 7.4, 1.1, 4.6, 3.9);
+        lens.cubicTo(1.7, 6.7, 1.7, 11.5, 4.6, 14.4);
+        lens.cubicTo(7.1, 17, 11.4, 17.5, 14.3, 15.5);
+        lens.lineTo(17.1, 18.2);
+        lens.quadTo(16.8, 18.9, 17.4, 19.5);
+        lens.lineTo(21.0, 23.0); lens.quadTo(21.6, 23.6, 22.2, 23.0);
+        lens.lineTo(23.0, 22.2); lens.quadTo(23.6, 21.6, 23.0, 21.0);
+        lens.lineTo(19.4, 17.4); lens.quadTo(18.9, 16.9, 18.2, 17.1);
+        lens.closeSubpath(); p->drawPath(lens);
+        QPainterPath reflection; reflection.moveTo(4.9, 7.4);
+        reflection.cubicTo(4.4, 10.7, 6.8, 14.4, 11.0, 14.3);
+        p->drawPath(reflection);
         break;
+    }
     case I_MORE:
         p->setBrush(c);
         p->drawEllipse(QPointF(12, 5), 1.5, 1.5);
@@ -2150,23 +2189,27 @@ public:
         QVBoxLayout *pathAndHeader = new QVBoxLayout(m_pathHeader);
         pathAndHeader->setContentsMargins(0, 0, 0, 0); pathAndHeader->setSpacing(0);
         m_pathLabel = new BrowserPathLabel(m_pathHeader);
-        QFont pathFont = fMsg; pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1)));
+        QFont pathFont = statusFont;
+        const QString pathFamily = defaultListFont();
+        if (!pathFamily.isEmpty()) pathFont.setFamily(pathFamily);
+        pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1)));
         m_pathLabel->setFont(pathFont);
         m_pathLabel->setWordWrap(false);
         m_pathLabel->setTextFormat(Qt::PlainText);
         m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:6px;"));
         pathAndHeader->addWidget(m_pathLabel);
 
-        // Unlabelled but fully tappable columns; show an arrow only on the active one.
+        // Fully tappable labelled columns, with the active direction on the left.
         m_columnHeader = new BrowserColumnHeader(m_pathHeader, fList);
         for (int n = 0; n < 3; ++n) {
             QPushButton *button = new QPushButton(m_columnHeader);
             const char *names[] = { "Сортировать по имени", "Сортировать по дате", "Сортировать по размеру" };
             button->setAccessibleName(u8(names[n]));
-            button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(statusFont);
+            QFont headerFont = statusFont; headerFont.setPixelSize(qMax(10, statusFont.pixelSize() * 3 / 4));
+            button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(headerFont);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
             button->setMinimumHeight(qMax(48, QFontMetrics(statusFont).lineSpacing() + 12));
-            button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;} QPushButton:pressed{background:black;color:white;}"));
+            button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;text-align:left;padding-left:4px;padding-right:4px;} QPushButton:pressed{background:black;color:white;}"));
             m_sortButtons << button; m_columnHeader->addColumn(button);
             connect(button, &QPushButton::clicked, [this, n]() { setSort(static_cast<BrowserSort>(n)); });
         }
@@ -2336,7 +2379,9 @@ public:
         });
 
         // Нижняя строка: постраничная навигация и счётчик всей папки.
-        m_footerLine = new QFrame(this); m_footerLine->setFrameShape(QFrame::HLine); lay->addWidget(m_footerLine);
+        m_footerLine = new QFrame(this); m_footerLine->setFrameShape(QFrame::NoFrame);
+        m_footerLine->setFixedHeight(qMax(1, qRound(1.5 * SCREEN_DPI / 300.0)));
+        m_footerLine->setStyleSheet(u8("background:black;border:none;")); lay->addWidget(m_footerLine);
         m_nav = new QWidget(this);
         QHBoxLayout *footer = new QHBoxLayout(m_nav);
         footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(qMax(6, qRound(GAP * 2.25)));
@@ -3158,8 +3203,9 @@ private:
     }
 
     void updateSortHeader() {
+        const char *labels[] = { "Название", "Дата", "Размер" };
         for (int n = 0; n < m_sortButtons.size(); ++n)
-            m_sortButtons[n]->setText(n == int(m_sort) ? (m_sortAscending ? u8("↑") : u8("↓")) : QString());
+            m_sortButtons[n]->setText((n == int(m_sort) ? (m_sortAscending ? u8("↑  ") : u8("↓  ")) : QString()) + u8(labels[n]));
     }
     void setSort(BrowserSort column) {
         if (column == SortSize && m_sort != SortSize) {

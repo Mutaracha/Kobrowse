@@ -47,6 +47,33 @@ class SettingsUiTest {
             require(QColor(image.pixel(inside)) == itemIconColor(mode == 1, mode == 2), "folder icon has filled correct ink");
         }
     }
+    static void testRowSeparators(KobrowseWindow &w) {
+        QStandardItemModel model(1, 1); const QModelIndex index = model.index(0, 0);
+        model.setData(index, QString::fromUtf8("Файл"), Qt::DisplayRole);
+        QStyleOptionViewItem option; option.rect = QRect(0, 0, 400, 90);
+        QImage normal(400, 90, QImage::Format_RGB32); normal.fill(Qt::white);
+        QPainter normalPainter(&normal); w.m_fileDelegate->paint(&normalPainter, option, index); normalPainter.end();
+        require(QColor(normal.pixel(200, 89)) == QColor(150, 150, 150), "ordinary row separator is gray");
+        model.setData(index, true, ROLE_DIR); model.setData(index, true, ROLE_PARENT);
+        QImage parent(400, 90, QImage::Format_RGB32); parent.fill(Qt::white);
+        QPainter parentPainter(&parent); w.m_fileDelegate->paint(&parentPainter, option, index); parentPainter.end();
+        int black = 0, white = 0;
+        for (int x = 100; x < 390; ++x) {
+            const QColor pixel(parent.pixel(x, 89));
+            if (pixel == QColor(Qt::black)) ++black;
+            if (pixel == QColor(Qt::white)) ++white;
+        }
+        require(black > 0 && white > 0, "parent row separator is dashed");
+        model.setData(index, false, ROLE_PARENT); model.setData(index, false, ROLE_DIR);
+        model.setData(index, QString::fromUtf8("01.01.26\n12:34"), ROLE_DATE);
+        QImage date(400, 90, QImage::Format_RGB32); date.fill(Qt::white);
+        QPainter datePainter(&date); w.m_fileDelegate->paint(&datePainter, option, index); datePainter.end();
+        const BrowserColumns cols = browserColumns(400, w.m_list->font());
+        bool darkGrayText = false;
+        for (int y = 10; y < 80; ++y) for (int x = cols.name + 3; x < cols.name + cols.date - 3; ++x)
+            if (QColor(date.pixel(x, y)) == QColor(80, 80, 80)) darkGrayText = true;
+        require(darkGrayText, "date and time text is dark gray");
+    }
     static void testNames(KobrowseWindow &w) {
         QStandardItemModel model(1, 1);
         const QModelIndex index = model.index(0, 0);
@@ -65,13 +92,19 @@ class SettingsUiTest {
     static void testPathLabel(KobrowseWindow &w) {
         const QFont font = w.m_pathLabel->font(); const QFontMetrics fm(font);
         require(displayBrowserPath("/mnt/onboard", "/mnt/onboard", font, 500) == "/", "root shown as slash");
-        require(displayBrowserPath("/mnt/onboard", "/mnt/onboard/a/b", font, 500) == "/a/b", "root prefix hidden");
-        const int width = fm.width(QString::fromUtf8("…/middle/last")) + 1;
+        require(displayBrowserPath("/mnt/onboard", "/mnt/onboard/a/b", font, 500) == "/a/b/", "root prefix hidden and trailing slash shown");
+        require(displayBrowserPath("/mnt/onboard", "/mnt/onboard/a/b/", font, 500) == "/a/b/", "trailing slash not doubled");
+        const int width = fm.width(QString::fromUtf8("…/middle/last/")) + 1;
         const QString shortened = displayBrowserPath("/mnt/onboard", "/mnt/onboard/first/middle/last", font, width);
-        require(shortened == QString::fromUtf8("…/middle/last"), "path removes whole leading components");
+        require(shortened == QString::fromUtf8("…/middle/last/"), "path removes whole leading components and retains slash");
         const QString longLeaf = displayBrowserPath("/mnt/onboard", "/mnt/onboard/veryveryverylongleaf", font, fm.width("short"));
-        require(fm.width(longLeaf) <= fm.width("short") && !longLeaf.contains('\n'), "long leaf fits one line");
+        require(fm.width(longLeaf) <= fm.width("short") && !longLeaf.contains('\n') && longLeaf.endsWith('/'), "long leaf fits one line and retains slash");
+        require(displayBrowserPath("/mnt/onboard", "/mnt/onboard/leaf", font, fm.width("/")) == "/", "tiny width retains slash when possible");
         require(!w.m_pathLabel->wordWrap(), "address is single line");
+        if (!defaultListFont().isEmpty()) require(font.family() == defaultListFont(), "address uses Avenir when available");
+        QImage address(w.m_pathLabel->size(), QImage::Format_RGB32); address.fill(Qt::white); w.m_pathLabel->render(&address);
+        require(QColor(address.pixel(0, address.height() / 2)) == QColor(Qt::black)
+                && QColor(address.pixel(3, address.height() / 2)) == QColor(80, 80, 80), "address has black outer and dark gray inner frame");
     }
     static void testFooter(KobrowseWindow &w) {
         const std::vector<int> originalPages = w.m_pageStarts;
@@ -234,8 +267,13 @@ public:
         require(w.m_deviceStatus->layout()->contentsMargins().left() == 32
                 && w.m_deviceStatus->layout()->contentsMargins().right() == 32, "status edges have extra margins");
         require(w.m_pathLabel->geometry().bottom() + 1 == w.m_columnHeader->geometry().top(), "path and columns touch");
-        require(w.m_sortButtons[0]->text() == QString::fromUtf8("↑") && w.m_sortButtons[1]->text().isEmpty()
-                && w.m_sortButtons[2]->text().isEmpty(), "only active sort arrow is shown");
+        require(w.m_sortButtons[0]->text() == QString::fromUtf8("↑  Название")
+                && w.m_sortButtons[1]->text() == QString::fromUtf8("Дата")
+                && w.m_sortButtons[2]->text() == QString::fromUtf8("Размер"), "headers show labels and left-aligned active arrow");
+        require(w.m_sortButtons[0]->font().pixelSize() < clock->font().pixelSize()
+                && w.m_sortButtons[0]->styleSheet().contains("text-align:left")
+                && w.m_sortButtons[0]->styleSheet().contains("padding-right:4px"), "header font is smaller with side padding");
+        require(w.m_footerLine->styleSheet().contains("background:black"), "footer separator is black");
         require(w.m_pageLabel->font().family() == clock->font().family()
                 && w.m_countLabel->font().family() == clock->font().family(), "footer uses status Avenir family");
         const QStringList iconNames = QStringList() << QString::fromUtf8("Домашняя папка")
@@ -275,7 +313,7 @@ public:
                 "input method fallback preserves text, cursor and built-in keyboard");
         input->submitInput(); require(submits == 1 && input->isVisible(), "failed submit occurs once and keeps editor open");
         delete input;
-        testFolderIcons(w); testNames(w); testPathLabel(w); testFooter(w); testTouchFeedback(w);
+        testFolderIcons(w); testRowSeparators(w); testNames(w); testPathLabel(w); testFooter(w); testTouchFeedback(w);
         require(w.m_sortButtons.size() == 3 && w.m_sortButtons[0]->text().contains(QString::fromUtf8("↑")), "default sort header");
         const QPoint sortTap = w.m_sortButtons[1]->mapTo(&w, w.m_sortButtons[1]->rect().center());
         touch(w, QEvent::TouchBegin, sortTap); touch(w, QEvent::TouchEnd, sortTap); QApplication::processEvents();
