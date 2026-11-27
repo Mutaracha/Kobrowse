@@ -39,7 +39,13 @@ jobs:
       - name: Test whole-row pagination (offscreen)
         run: bash tests/run-pagination-ui-tests.sh
       - name: Test settings window and drafts (offscreen)
-        run: bash tests/run-settings-ui-tests.sh
+        run: |
+          if ! bash tests/run-settings-ui-tests.sh > build/settings-test.log 2>&1; then
+            cat build/settings-test.log
+            tail -n 20 build/settings-test.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/settings-test.log
       - name: Test brightness gesture and mock native backend (offscreen)
         run: bash tests/run-brightness-tests.sh
       - name: Test ZIP creation
