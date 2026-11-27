@@ -93,7 +93,8 @@ class SettingsUiTest {
         w.handleTouch(&event);
     }
     static void testTouchFeedback(KobrowseWindow &w) {
-        QPushButton *button = w.m_next->isEnabled() ? w.m_next : w.m_countLabel;
+        QPushButton *button = w.m_countLabel;
+        if (w.m_next->isEnabled()) button = w.m_next;
         const QPoint point = button->mapTo(&w, button->rect().center());
         touch(w, QEvent::TouchBegin, point);
         require(button->isDown(), "touch starts pressed feedback");
