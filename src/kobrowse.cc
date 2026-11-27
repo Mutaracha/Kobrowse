@@ -400,6 +400,7 @@ public:
                 book.moveTo(box.left(), box.bottom() - sz * .16);
                 book.cubicTo(box.left(), box.bottom() - sz * .27, box.left() + sz * .08, box.bottom() - sz * .30, box.left() + sz * .18, box.bottom() - sz * .30);
                 book.lineTo(box.right(), box.bottom() - sz * .30); book.lineTo(box.right(), box.top());
+                QPen bookPen = p->pen(); bookPen.setWidthF(qMax(1.0, bookPen.widthF() * 1.3)); p->setPen(bookPen);
                 p->drawPath(book);
                 QString ext = QFileInfo(idx.data().toString()).suffix().toUpper();
                 if (ext.isEmpty()) ext = u8("TXT");
@@ -418,24 +419,38 @@ public:
                           << QPointF(box.right() - sz * .05, box.bottom() - sz * .10);
                 p->drawPolyline(mountains);
             } else if (kind == FileArchive) {
-                // Three bound volumes, modelled on the supplied archive icon.
+                // The reference is a stack of three curved books, bound by a strap.
                 const qreal x = box.left(), y = box.top(), w = box.width(), h = box.height();
-                QPolygonF outline; outline << QPointF(x, y) << QPointF(x+w*.69, y)
-                    << QPointF(x+w, y+h*.19) << QPointF(x+w, y+h)
-                    << QPointF(x+w*.24, y+h) << QPointF(x, y+h*.81) << QPointF(x, y);
-                p->drawPolyline(outline);
+                QPen archivePen = p->pen(); archivePen.setWidthF(qMax(1.0, archivePen.widthF() * 1.3));
+                archivePen.setJoinStyle(Qt::RoundJoin); p->setPen(archivePen);
+                QPainterPath cover;
+                cover.moveTo(x, y); cover.lineTo(x+w*.69, y); cover.lineTo(x+w*.97, y+h*.19);
+                cover.cubicTo(x+w*1.01, y+h*.24, x+w*1.01, y+h*.35, x+w*.97, y+h*.42);
+                cover.cubicTo(x+w*1.01, y+h*.49, x+w*1.01, y+h*.62, x+w*.97, y+h*.68);
+                cover.cubicTo(x+w*1.01, y+h*.76, x+w*1.01, y+h*.92, x+w*.97, y+h);
+                cover.lineTo(x+w*.24, y+h); cover.lineTo(x, y+h*.81);
+                cover.cubicTo(x+w*.03, y+h*.74, x+w*.03, y+h*.68, x, y+h*.62);
+                cover.cubicTo(x+w*.03, y+h*.55, x+w*.03, y+h*.48, x, y+h*.42);
+                cover.cubicTo(x+w*.03, y+h*.29, x+w*.03, y+h*.14, x, y); p->drawPath(cover);
                 p->drawLine(QPointF(x, y), QPointF(x+w*.24, y+h*.19));
-                p->drawLine(QPointF(x+w*.24, y+h*.19), QPointF(x+w, y+h*.19));
-                p->drawLine(QPointF(x+w*.24, y+h*.19), QPointF(x+w*.24, y+h));
+                p->drawLine(QPointF(x+w*.24, y+h*.19), QPointF(x+w*.97, y+h*.19));
+                QPainterPath spine; spine.moveTo(x+w*.24, y+h*.19);
+                spine.cubicTo(x+w*.29, y+h*.27, x+w*.29, y+h*.37, x+w*.24, y+h*.46);
+                spine.cubicTo(x+w*.29, y+h*.54, x+w*.29, y+h*.64, x+w*.24, y+h*.73);
+                spine.cubicTo(x+w*.29, y+h*.83, x+w*.29, y+h*.94, x+w*.24, y+h);
+                p->drawPath(spine);
                 for (int i = 1; i <= 2; ++i) {
                     const qreal yy = y+h*(.19 + .27*i);
                     p->drawLine(QPointF(x, yy-h*.19), QPointF(x+w*.24, yy));
-                    p->drawLine(QPointF(x+w*.24, yy), QPointF(x+w, yy));
+                    p->drawLine(QPointF(x+w*.24, yy), QPointF(x+w*.97, yy));
                 }
-                p->drawLine(QPointF(x+w*.48, y), QPointF(x+w*.72, y+h*.19));
-                p->drawLine(QPointF(x+w*.72, y+h*.19), QPointF(x+w*.72, y+h));
+                p->drawLine(QPointF(x+w*.42, y), QPointF(x+w*.66, y+h*.19));
+                p->drawLine(QPointF(x+w*.55, y), QPointF(x+w*.78, y+h*.19));
+                p->drawLine(QPointF(x+w*.66, y+h*.19), QPointF(x+w*.66, y+h));
+                p->drawLine(QPointF(x+w*.78, y+h*.19), QPointF(x+w*.78, y+h));
                 p->setBrush(mark ? Qt::black : Qt::white);
-                p->drawRect(QRectF(x+w*.64, y+h*.43, w*.18, h*.16)); p->setBrush(Qt::NoBrush);
+                p->drawRoundedRect(QRectF(x+w*.61, y+h*.40, w*.22, h*.18), sz*.025, sz*.025);
+                p->setBrush(Qt::NoBrush);
             }
         }
         p->setPen(ink);
@@ -701,12 +716,13 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this); p.setRenderHint(QPainter::Antialiasing, true);
-        const qreal h = qMax(12, qMin(height() - 12, width() - 12));
+        const qreal h = qMax(12.0, qMin(height() - 12, width() - 12) * .85);
         const QRectF box((width()-h)/2, (height()-h)/2, h, h);
         const QColor ink = Qt::black;
         p.setPen(QPen(ink, qMax(1.5, h / 20.0), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.setBrush(Qt::NoBrush); p.drawRect(box);
+        p.setBrush(isChecked() ? Qt::black : Qt::white); p.drawRect(box);
         if (isChecked()) {
+            p.setPen(QPen(Qt::white, qMax(1.5, h / 20.0), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
             QPolygonF check; check << QPointF(box.left()+h*.18, box.top()+h*.52)
                 << QPointF(box.left()+h*.42, box.top()+h*.75) << QPointF(box.left()+h*.84, box.top()+h*.24);
             p.drawPolyline(check);
@@ -1826,6 +1842,20 @@ static bool saveConfig(const QStringList &keys, const QStringList &vals) {
     return true;
 }
 
+// Single separators between choices; the enclosing dialog and buttons supply
+// their own borders, so the last row must not draw a second horizontal rule.
+class PickerDelegate : public QStyledItemDelegate {
+public:
+    explicit PickerDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
+    void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override {
+        QStyledItemDelegate::paint(p, option, index);
+        if (index.row() + 1 < index.model()->rowCount(index.parent())) {
+            p->save(); p->setPen(QPen(QColor(140, 140, 140), 1));
+            p->drawLine(option.rect.bottomLeft(), option.rect.bottomRight()); p->restore();
+        }
+    }
+};
+
 // ---------- окно менеджера ----------
 // Без Q_OBJECT: только сигналы Qt + лямбды, moc не нужен
 class KobrowseWindow : public QWidget {
@@ -1951,7 +1981,19 @@ public:
 
         // Экран «Настройки» (kobrowse.ini): строки «название — значение — [−] [+]», внизу
         // Сохранить / По умолчанию / Отмена. Скрыт; на время показа прячутся список и кнопки.
-        buildSettings(fMsg, fBtn);
+        QFont settingsText = sansFont();
+        const QStringList settingsFamilies = QFontDatabase().families();
+        const char *avenirNames[] = { "Avenir", "Avenir Next" };
+        bool avenirFound = false;
+        for (const char *name : avenirNames) {
+            for (const QString &family : settingsFamilies)
+                if (family.compare(u8(name), Qt::CaseInsensitive) == 0) { settingsText = QFont(family); avenirFound = true; break; }
+            if (avenirFound) break;
+        }
+        settingsText.setStyleHint(QFont::SansSerif);
+        settingsText.setPixelSize(FONT_MSG + ptToPx(1));
+        QFont settingsButton = settingsText; settingsButton.setPixelSize(FONT_BTN + ptToPx(1));
+        buildSettings(settingsText, settingsButton);
         lay->addWidget(m_settings, 1);
 
         m_msgTimer.setSingleShot(true);
@@ -2006,15 +2048,15 @@ public:
         m_pickerDialog = new QWidget(this); m_pickerDialog->setObjectName(u8("pickerDialog"));
         m_pickerDialog->setStyleSheet(u8("QWidget#pickerDialog{border:2px solid black;background:white;}"));
         QVBoxLayout *pickerLayout = new QVBoxLayout(m_pickerDialog);
-        pickerLayout->setContentsMargins(0, 0, 0, 0); pickerLayout->setSpacing(0);
-        m_pickerTitle = new QLabel(m_pickerDialog); m_pickerTitle->setFont(fMsg);
+        pickerLayout->setContentsMargins(2, 2, 2, 2); pickerLayout->setSpacing(0);
+        m_pickerTitle = new QLabel(m_pickerDialog); m_pickerTitle->setFont(settingsText);
         m_pickerTitle->setAlignment(Qt::AlignCenter); m_pickerTitle->setMinimumHeight(qMax(48, BTN_HEIGHT));
         pickerLayout->addWidget(m_pickerTitle);
         m_fontPicker = new QTreeWidget(m_pickerDialog);
         pickerLayout->addWidget(m_fontPicker, 1);
         QHBoxLayout *pickerButtons = new QHBoxLayout(); pickerButtons->setSpacing(0);
-        m_pickerCancel = makeButton(pickerButtons, fBtn, "Отмена", BTN_HEIGHT, 1);
-        m_pickerDone = makeButton(pickerButtons, fBtn, "Готово", BTN_HEIGHT, 1);
+        m_pickerDone = makeButton(pickerButtons, settingsButton, "Готово", BTN_HEIGHT, 1);
+        m_pickerCancel = makeButton(pickerButtons, settingsButton, "Отмена", BTN_HEIGHT, 1);
         m_pickerCancel->setObjectName(u8("pickerCancel")); m_pickerDone->setObjectName(u8("pickerDone"));
         pickerLayout->addLayout(pickerButtons);
         connect(m_pickerCancel, &QPushButton::clicked, [this]() { m_pickerDialog->hide(); m_pickerShade->hide(); });
@@ -2022,13 +2064,14 @@ public:
         m_pickerDialog->hide();
         m_fontPicker->setColumnCount(1); m_fontPicker->setHeaderHidden(true);
         m_fontPicker->setRootIsDecorated(false); m_fontPicker->setIndentation(0);
-        m_fontPicker->setFont(fMsg);
+        m_fontPicker->setFont(settingsText);
         m_fontPicker->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_fontPicker->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_fontPicker->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-        m_fontPicker->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
-                                      "QTreeWidget::item{padding-left:12px;border-bottom:2px solid black;}"
+        m_fontPicker->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:0;}"
+                                      "QTreeWidget::item{padding-left:12px;}"
                                       "QTreeWidget::item:selected,QTreeWidget::item:selected:!active{background:black;color:white;}"));
+        m_fontPicker->setItemDelegate(new PickerDelegate(m_fontPicker));
         m_fontPicker->setSelectionMode(QAbstractItemView::SingleSelection);
         connect(m_fontPicker, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
             if (item) m_fontPicker->setCurrentItem(item);
@@ -2040,28 +2083,29 @@ public:
         // Подтверждение необратимых операций — внутри окна, без системного диалога.
         m_confirm = new QWidget(this);
         QVBoxLayout *confirmLayout = new QVBoxLayout(m_confirm);
-        confirmLayout->setContentsMargins(GAP, GAP, GAP, GAP);
+        confirmLayout->setContentsMargins(2, 2, 2, 2); confirmLayout->setSpacing(0);
         m_confirm->setObjectName(u8("confirm"));
         m_confirm->setStyleSheet(u8("QWidget#confirm{border:2px solid black;background:white;}"));
         m_confirmText = new QLabel(m_confirm);
         m_confirmText->setWordWrap(true);
-        m_confirmText->setFont(fMsg);
-        m_confirmText->setStyleSheet(u8("border:none;"));
+        m_confirmText->setFont(settingsText);
+        m_confirmText->setStyleSheet(u8("border:none;padding:16px;"));
         confirmLayout->addWidget(m_confirmText);
         QHBoxLayout *confirmButtons = new QHBoxLayout();
-        QPushButton *confirmYes = makeButton(confirmButtons, fBtn, "Да", BTN_HEIGHT, 1);
-        QPushButton *confirmNo = makeButton(confirmButtons, fBtn, "Отмена", BTN_HEIGHT, 1);
+        confirmButtons->setSpacing(0);
+        QPushButton *confirmYes = makeButton(confirmButtons, settingsButton, "Да", BTN_HEIGHT, 1);
+        QPushButton *confirmNo = makeButton(confirmButtons, settingsButton, "Отмена", BTN_HEIGHT, 1);
         confirmYes->setObjectName(u8("confirmYes")); confirmNo->setObjectName(u8("confirmNo"));
         confirmLayout->addLayout(confirmButtons);
         connect(confirmYes, &QPushButton::clicked, [this]() { confirmDeletion(); });
         connect(confirmNo, &QPushButton::clicked, [this]() {
             if (m_pendingDelete == 1) clearSelection();
-            m_confirm->hide(); m_pendingDelete = 0; m_confirmSetting = -1; m_pendingZip.clear();
+            m_confirm->hide(); m_pickerShade->hide(); m_pendingDelete = 0; m_confirmSetting = -1; m_pendingZip.clear();
         });
         m_confirm->hide();
 
         m_workOverlay = new QWidget(this); m_workOverlay->setObjectName(u8("workOverlay"));
-        m_workOverlay->setStyleSheet(u8("QWidget#workOverlay{background-color:rgba(255,255,255,220);}"));
+        m_workOverlay->setStyleSheet(u8("QWidget#workOverlay{background-color:rgba(0,0,0,40);}"));
         QVBoxLayout *workLayout = new QVBoxLayout(m_workOverlay);
         m_workText = new QLabel(m_workOverlay); m_workText->setFont(fMsg);
         m_workText->setAlignment(Qt::AlignCenter); m_workText->setWordWrap(true);
@@ -2377,7 +2421,7 @@ protected:
         if (m_workOverlay) m_workOverlay->setGeometry(rect());
         placeActionMenu();
         if (m_fontPicker && m_fontPicker->isVisible()) { m_pickerShade->setGeometry(rect()); placePicker(); }
-        if (m_confirm && m_confirm->isVisible()) placeConfirmation();
+        if (m_confirm && m_confirm->isVisible()) { m_pickerShade->setGeometry(rect()); placeConfirmation(); }
         m_pageTimer.start(0);
     }
     void showEvent(QShowEvent *e) override {
@@ -2445,7 +2489,10 @@ private:
                             ? m_confirm->layout()->heightForWidth(w) : m_confirm->sizeHint().height());
         m_confirm->setGeometry((width() - w) / 2, (height() - h) / 2, w, h);
     }
-    void showConfirmation() { placeConfirmation(); m_confirm->show(); m_confirm->raise(); }
+    void showConfirmation() {
+        placeConfirmation(); m_pickerShade->setGeometry(rect()); m_pickerShade->show(); m_pickerShade->raise();
+        m_confirm->show(); m_confirm->raise();
+    }
 
     // Показать отмеченную строку после того, как раскладка обновится
     // (ряд действий и сведения сжимают список и могли её закрыть)
@@ -2820,7 +2867,7 @@ private:
     void confirmDeletion() {
         const int action = m_pendingDelete;
         m_pendingDelete = 0;
-        m_confirm->hide();
+        m_confirm->hide(); m_pickerShade->hide();
         if ((action == 1 || action == 2) && !m_busy) {
             m_pendingDelete = action;
             startWork(action == 2 ? u8("Очистка корзины…") : u8("Удаление файлов…"), [this]() { confirmDeletion(); });
@@ -3130,7 +3177,7 @@ private:
     // их читает tapAt и вызывает stepSetting напрямую (сигнал clicked на e-ink не всегда доходит).
     QPushButton *makeStepButton(QHBoxLayout *row, const QFont &f, const char *text,
                                 int h, int w, int idx, int dir) {
-        auto *b = new QPushButton(u8(text), this);
+        auto *b = new QPushButton(u8(text), row->parentWidget());
         QFont sf = f;
         sf.setPixelSize(qMax(16, qMin(f.pixelSize() > 0 ? f.pixelSize() : 24, int(h * 0.55))));
         b->setFont(sf);
@@ -3216,37 +3263,32 @@ private:
                 heading->setMinimumHeight(rowH / 2);
                 groupLayout->addWidget(heading);
             }
-            if (group == GroupTrash || group == GroupBooks) {
-                QLabel *hint = new QLabel(group == GroupTrash
-                    ? u8("При выключенной корзине файлы удаляются безвозвратно после подтверждения.")
-                    : u8("Авто: открывать только на прошивках 4.38.x; Всегда: на свой риск; Никогда: не открывать."), body);
-                hint->setFont(fText); hint->setWordWrap(true); items->addWidget(hint);
-            }
             for (int i = 0; i < SET_COUNT; ++i) {
                 if (settingGroup(u8(SET_ITEMS[i].key)) != group) continue;
                 QWidget *line = new QWidget(body);
                 line->setMinimumHeight(rowH);
-                QHBoxLayout *r = new QHBoxLayout();
+                QHBoxLayout *r = new QHBoxLayout(line);
                 r->setContentsMargins(0, 0, 0, 0); r->setSpacing(qMax(4, qRound(10 * sc)));
                 QLabel *name = new QLabel(u8(SET_ITEMS[i].label), line);
                 name->setFont(fText); name->setWordWrap(true); name->setMinimumWidth(0);
                 name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
                 if (isFontSizeSetting(u8(SET_ITEMS[i].key))) {
-                    line->setLayout(r);
-                    name->setFixedWidth(qMax(120, qRound(240 * sc)));
+                    name->setFixedWidth(qMax(160, qRound(260 * sc)));
+                    name->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
                     r->addWidget(name);
                 } else {
-                    line->setLayout(r);
                     QVBoxLayout *textColumn = new QVBoxLayout(); textColumn->setContentsMargins(0, 0, 0, 0); textColumn->setSpacing(2);
                     textColumn->addWidget(name);
                     const QString key = u8(SET_ITEMS[i].key);
                     const QString hint = key == u8("allow_adds_edit") ? u8("Изменение файлов приложений может нарушить их работу.")
                         : key == u8("show_hidden") ? u8("Показывать имена, начинающиеся с точки.")
+                        : key == u8("trash_enabled") ? u8("При выключенной корзине файлы удаляются безвозвратно после подтверждения.")
+                        : key == u8("open_books") ? u8("Авто: только прошивки 4.38.x; Всегда: на свой риск; Никогда: не открывать.")
                         : key == u8("logging_enabled") ? u8("Журнал может содержать пути и имена файлов.") : QString();
                     if (!hint.isEmpty()) {
                         QLabel *description = new QLabel(hint, line); description->setWordWrap(true);
                         description->setMinimumWidth(0); description->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-                        QFont descriptionFont = fText; descriptionFont.setPixelSize(qMax(12, fText.pixelSize() * 3 / 4));
+                        QFont descriptionFont = fText; descriptionFont.setPixelSize(qMax(12, FONT_MSG * 3 / 4 + ptToPx(1)));
                         description->setFont(descriptionFont); textColumn->addWidget(description);
                     }
                     r->addLayout(textColumn, 1);
@@ -3299,7 +3341,6 @@ private:
                 separator->setFrameShape(QFrame::NoFrame);
                 separator->setFixedHeight(qMax(1, qRound(1.5 * sc)));
                 separator->setStyleSheet(u8("background:black;")); items->addWidget(separator);
-                if (group == GroupTrash) separator->hide();
                 m_settingRows[i] = line; m_settingLines[i] = separator;
             }
             if (group == GroupFiles) {
@@ -3313,13 +3354,6 @@ private:
                 connect(m_resetHomeButton, &QPushButton::clicked, [this]() {
                     m_resetHomeDraft = true; saveSettings(); updateHomeDraft();
                 });
-                items->addLayout(actions);
-            } else if (group == GroupTrash) {
-                QHBoxLayout *actions = new QHBoxLayout();
-                QPushButton *empty = makeButton(actions, fBtn, "Очистить корзину", rowH, 0);
-                empty->setObjectName(u8("settingsEmptyTrash"));
-                empty->setFixedWidth(QFontMetrics(fBtn).width(u8("Очистить корзину")) + 2 * BTN_MARGIN + 8); actions->addStretch(1);
-                connect(empty, &QPushButton::clicked, [this]() { leaveSettingsForTrash(true); });
                 items->addLayout(actions);
             } else if (group == GroupLogging) {
                 QHBoxLayout *actions = new QHBoxLayout();
@@ -3387,9 +3421,6 @@ private:
             QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
             item->setText(0, m_fonts[n].isEmpty() ? u8("Системный") : m_fonts[n]);
             item->setData(0, Qt::UserRole, n);
-            if (!m_fonts[n].isEmpty()) {
-                QFont preview = m_fontPicker->font(); preview.setFamily(m_fonts[n]); item->setFont(0, preview);
-            }
             item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
             if (m_fonts[n].compare(m_setVals[row], Qt::CaseInsensitive) == 0) current = item;
         }

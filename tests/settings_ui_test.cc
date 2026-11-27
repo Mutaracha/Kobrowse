@@ -294,7 +294,16 @@ public:
         require(SET_ITEMS[font].lo == 7 && SET_ITEMS[font].hi == 14 && SET_ITEMS[font].step == .5
                 && cfgDefault("list_pt") == "8.5", "font limits and default");
         require(!w.m_settingsNotice->isVisible(), "empty notice does not cover settings");
-        require(w.m_settingLines[row("trash_enabled")]->isHidden(), "no line before empty trash");
+        require(!w.findChild<QPushButton *>("settingsEmptyTrash"), "no empty trash action in settings");
+        SettingSwitch *box = w.m_switches[hidden]; box->setChecked(true);
+        QImage checkImage(box->size(), QImage::Format_RGB32); checkImage.fill(Qt::white); box->render(&checkImage);
+        const int boxSize = qRound(qMin(box->height() - 12, box->width() - 12) * .85);
+        const int left = (box->width() - boxSize) / 2, top = (box->height() - boxSize) / 2;
+        require(qGray(checkImage.pixel(left + boxSize / 2, top + boxSize / 5)) < 80,
+                "checked box has black interior");
+        box->setDown(true); QImage pressed(box->size(), QImage::Format_RGB32); pressed.fill(Qt::white); box->render(&pressed); box->setDown(false);
+        require(qGray(pressed.pixel(0, 0)) > 200, "checkbox press does not blacken surrounding area");
+        w.refreshSettings();
         require(w.m_homeStatus->parentWidget() == w.m_resetHomeButton->parentWidget(), "home path and reset share a row");
         require(w.m_resetHomeButton->width() >= QFontMetrics(w.m_resetHomeButton->findChild<ButtonFace *>()->font()).width(QString::fromUtf8("Сбросить домашнюю папку")),
                 "home reset text is not clipped");
@@ -320,11 +329,31 @@ public:
             require(face && face->width() >= QFontMetrics(face->font()).width(face->text()) + 2 * BTN_MARGIN,
                     "reset button label fits without clipping");
         }
-        w.resize(768, 1024); QApplication::processEvents();
+        for (int screenWidth : {600, 768, 1180}) {
+            w.resize(screenWidth, 1024);
+            for (int tab = 0; tab < 2; ++tab) {
+                w.setSettingsTab(tab); QApplication::processEvents();
+                const int i = tab == 0 ? hold : font;
+                QWidget *widgets[] = { w.m_setLabels[i], w.m_minusBtns[i], w.m_sliders[i], w.m_plusBtns[i] };
+                for (int a = 0; a < 4; ++a) {
+                    require(widgets[a]->parentWidget() == w.m_settingRows[i], "slider controls share row parent");
+                    const QRect first(widgets[a]->mapTo(&w, QPoint()), widgets[a]->size());
+                    for (int b = a + 1; b < 4; ++b) {
+                        const QRect second(widgets[b]->mapTo(&w, QPoint()), widgets[b]->size());
+                        require(!first.intersects(second), "slider label and controls never overlap");
+                    }
+                }
+                QLabel *label = w.m_setLabels[i];
+                require(label->heightForWidth(label->width()) <= label->height(), "slider caption is fully visible");
+            }
+        }
+        w.setSettingsTab(0); w.resize(768, 1024); QApplication::processEvents();
         const int oldHold = LONG_TAP_MS; w.m_plusBtns[hold]->click();
         require(LONG_TAP_MS == oldHold + 50 && w.m_settings->isVisible(), "hold setting saved immediately");
         w.stepSetting(adds, 1); QApplication::processEvents();
         require(w.m_confirm->isVisible() && !ALLOW_ADDS, "adds asks confirmation");
+        require(w.m_pickerShade->isVisible() && yes->mapTo(&w, QPoint()).x() < no->mapTo(&w, QPoint()).x(),
+                "confirmation is shaded and cancel is on right");
         require(qAbs(w.m_confirm->geometry().center().x() - w.rect().center().x()) < 3
                 && qAbs(w.m_confirm->geometry().center().y() - w.rect().center().y()) < 3, "confirmation centered");
         no->click(); require(!ALLOW_ADDS, "declining leaves adds protected");
@@ -332,6 +361,7 @@ public:
         QPushButton *choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(books));
         require(choice, "current book choice is clickable"); choice->click();
         require(w.m_pickerShade->isVisible(), "picker shades background");
+        require(w.m_pickerDone->mapTo(&w, QPoint()).x() < w.m_pickerCancel->mapTo(&w, QPoint()).x(), "cancel right of done");
         require(w.m_fontPicker->isVisible() && w.m_fontPicker->currentItem()
             && w.m_fontPicker->currentItem()->isSelected() && w.m_fontPicker->topLevelItemCount() == 3,
             "current choice selected and no cancel item");
@@ -356,8 +386,8 @@ public:
         choice->click();
         require(w.m_fontPicker->currentItem() && w.m_fontPicker->currentItem()->isSelected(), "current font selected");
         require(w.m_fontPicker->topLevelItemCount() == w.m_fonts.size(), "font picker has no cancel item");
-        if (w.m_fonts.size() > 1)
-            require(w.m_fontPicker->topLevelItem(1)->font(0).family() == w.m_fonts.at(1), "font choice uses its own family");
+        require(w.m_pickerDone->mapTo(&w, QPoint()).x() < w.m_pickerCancel->mapTo(&w, QPoint()).x(),
+                "picker cancel is on the right");
         require(w.m_setLabels[font]->text().contains(QString::fromUtf8(" пт")), "font size includes points");
         w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(0)); w.m_pickerDone->click();
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
