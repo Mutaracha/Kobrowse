@@ -161,6 +161,27 @@ inline bool copyStagedTree(const QString &root, const QString &src, const QStrin
     return true;
 }
 
+// Create exactly one child without overwriting any existing name or link.
+inline bool createLocalDirectory(const QString &root, const QString &parent, const QString &name,
+                                 QString &error, bool allowAdds = false) {
+    if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")
+        || name.contains(QLatin1Char('/')) || name.contains(QLatin1Char('\\'))
+        || name.contains(QChar(0)) || name.contains(QLatin1Char('\n')) || name.contains(QLatin1Char('\r'))) {
+        error = QString::fromUtf8("Недопустимое имя"); return false;
+    }
+    if (!safeLocalPath(root, parent) || !QFileInfo(parent).isDir() || !writableLocalDirectory(root, parent, allowAdds)) {
+        error = QString::fromUtf8("Папка недоступна для изменений"); return false;
+    }
+    const QString dest = QDir(parent).filePath(name);
+    if (protectedLocalPath(root, dest, allowAdds) || !safeLocalPath(root, dest, true)
+        || QFileInfo(dest).exists() || QFileInfo(dest).isSymLink()) {
+        error = QString::fromUtf8("Имя уже занято или недоступно"); return false;
+    }
+    // mkdir is atomic: unlike mkpath it never succeeds for a pre-existing entry.
+    if (!QDir(parent).mkdir(name)) { error = QString::fromUtf8("Не удалось создать папку"); return false; }
+    return true;
+}
+
 // Rename one local, non-protected entry; never replace an existing destination.
 inline bool renameLocalEntry(const QString &root, const QString &source, const QString &name, QString &error, bool allowAdds = false) {
     if (name.isEmpty() || name == QLatin1String(".") || name == QLatin1String("..")

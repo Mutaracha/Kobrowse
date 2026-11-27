@@ -56,7 +56,7 @@ class SettingsUiTest {
             w.resize(width, 1024); QApplication::processEvents();
             const QString shown = w.m_fileDelegate->displayedName(index);
             require(!shown.contains(QLatin1Char('\n')), "file name remains a single line");
-            const int available = w.m_list->viewport()->width() - qMax(32, 2 * ICON_PX) - 18;
+            const int available = w.m_list->viewport()->width() * 54 / 100 - qMax(32, 2 * ICON_PX) - 18;
             require(QFontMetrics(w.m_list->font()).width(shown) <= available, "elided name fits viewport");
             if (shown != name) require(shown.endsWith(QString::fromUtf8(".epub")), "elision preserves extension");
         }
@@ -223,6 +223,8 @@ public:
                 "status labels use explicit compact font");
         QLabel *build = w.m_deviceStatus->findChild<QLabel *>("statusBuild");
         require(build && build->text().contains("local") && build->font().pixelSize() == clock->font().pixelSize(), "build identity in status row");
+        QLabel *free = w.m_deviceStatus->findChild<QLabel *>("statusFree");
+        require(free && !free->text().contains("--") && free->font().pixelSize() == clock->font().pixelSize(), "available storage in status row");
         require(clock->font().family() == batteryLabel->font().family() && build->font().family() == clock->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
         require(w.m_actions->font().pixelSize() == w.m_list->font().pixelSize()
@@ -249,6 +251,19 @@ public:
         const QString pathBeforeSleep = w.m_path; w.hide(); w.show();
         require(w.m_path == pathBeforeSleep, "hide and restore preserves browsing state");
         testFolderIcons(w); testNames(w); testPathLabel(w); testFooter(w); testTouchFeedback(w);
+        require(w.m_sortButtons.size() == 3 && w.m_sortButtons[0]->text().contains(QString::fromUtf8("↑")), "default sort header");
+        const QPoint sortTap = w.m_sortButtons[1]->mapTo(&w, w.m_sortButtons[1]->rect().center());
+        touch(w, QEvent::TouchBegin, sortTap); touch(w, QEvent::TouchEnd, sortTap); QApplication::processEvents();
+        require(w.m_sort == SortDate && w.m_sortAscending && w.m_sortButtons[1]->text().contains(QString::fromUtf8("↑")), "touch sorts by date");
+        w.m_sortButtons[1]->click(); require(!w.m_sortAscending && w.m_sortButtons[1]->text().contains(QString::fromUtf8("↓")), "sort direction reversed");
+        w.m_sortButtons[2]->click(); require(w.m_sort == SortSize && w.m_sortAscending, "size column sorts");
+        w.m_sortButtons[0]->click(); require(w.m_sort == SortName && w.m_sortAscending, "name column sorts");
+        w.m_menuRequested = true; w.updateActions();
+        bool mkdirShown = false;
+        for (int n = 0; n < w.m_actions->topLevelItemCount(); ++n)
+            if (w.m_actions->topLevelItem(n)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActMkdir
+                && (w.m_actions->topLevelItem(n)->flags() & Qt::ItemIsEnabled)) mkdirShown = true;
+        require(mkdirShown, "empty selection menu offers create folder"); w.clearSelection();
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
         require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");

@@ -327,7 +327,8 @@ static const int ROLE_PATH = Qt::UserRole,     // полный путь
                  ROLE_DETAIL = Qt::UserRole + 4, // дата и размер
                  ROLE_PARENT = Qt::UserRole + 5, // специальная строка «..»
                  ROLE_READONLY = Qt::UserRole + 6, // защита от операций
-                 ROLE_KIND = Qt::UserRole + 7; // тип файла для значка
+                 ROLE_KIND = Qt::UserRole + 7, // тип файла для значка
+                 ROLE_DATE = Qt::UserRole + 8, ROLE_SIZE = Qt::UserRole + 9;
 
 // Разбивка текста на строки по ширине: по словам, а слово длиннее строки — где угодно.
 // Возвращает высоту; если painter задан — ещё и рисует.
@@ -366,9 +367,8 @@ public:
     }
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &idx) const override {
         const qreal h = layoutText(displayedName(idx), fontFor(idx), textWidth());
-        const QString detail = idx.data(ROLE_DETAIL).toString();
-        const qreal d = detail.isEmpty() ? 0 : layoutText(detail, detailFont(), textWidth());
-        const int wanted = qMax(iconSize(), int(h + d)) + 2 * PAD_V + 1;
+        const int detailHeight = idx.data(ROLE_DATE).toString().isEmpty() ? 0 : QFontMetrics(detailFont()).lineSpacing() * 2;
+        const int wanted = qMax(iconSize(), qMax(int(h), detailHeight)) + 2 * PAD_V + 1;
         return QSize(m_view->width(), m_maxHeight > 0 ? qMin(wanted, m_maxHeight) : wanted);
     }
     void paint(QPainter *p, const QStyleOptionViewItem &opt, const QModelIndex &idx) const override {
@@ -464,12 +464,16 @@ public:
         }
         p->setPen(ink);
         const QPointF pos(opt.rect.left() + PAD_H * 2 + sz, opt.rect.top() + PAD_V);
-        const QString name = displayedName(idx);
         p->setClipRect(opt.rect);
-        const qreal h = layoutText(name, fontFor(idx), textWidth(), p, pos);
-        const QString detail = idx.data(ROLE_DETAIL).toString();
-        if (!detail.isEmpty())
-            layoutText(detail, detailFont(), textWidth(), p, QPointF(pos.x(), pos.y() + h));
+        layoutText(displayedName(idx), fontFor(idx), textWidth(), p, pos);
+        const int dateLeft = opt.rect.left() + opt.rect.width() * 54 / 100;
+        const int sizeLeft = opt.rect.left() + opt.rect.width() * 81 / 100;
+        p->setFont(detailFont());
+        const QRect dateRect(dateLeft + 3, opt.rect.top() + PAD_V, qMax(1, sizeLeft - dateLeft - 6), opt.rect.height() - 2 * PAD_V);
+        const QRect sizeRect(sizeLeft + 3, opt.rect.top() + PAD_V, qMax(1, opt.rect.right() - sizeLeft - 6), opt.rect.height() - 2 * PAD_V);
+        p->drawText(dateRect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextWordWrap, idx.data(ROLE_DATE).toString());
+        p->drawText(sizeRect, Qt::AlignVCenter | Qt::AlignRight,
+                    QFontMetrics(detailFont()).elidedText(idx.data(ROLE_SIZE).toString(), Qt::ElideRight, sizeRect.width()));
         if (!mark) {
             p->setPen(QPen(Qt::black, qMax(1, qRound(1.5 * SCREEN_DPI / 300.0))));
             p->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
@@ -488,7 +492,7 @@ private:
     qreal textWidth() const {
         const QAbstractScrollArea *area = qobject_cast<const QAbstractScrollArea *>(m_view);
         const int width = area ? area->viewport()->width() : m_view->width();
-        return qMax(1, width - iconSize() - 3 * PAD_H);
+        return qMax(1, width * 54 / 100 - iconSize() - 3 * PAD_H);
     }
     QWidget *m_view;
     QFont m_font;
@@ -1375,8 +1379,8 @@ public:
 
         qApp->installEventFilter(this);
     }
-    void startRename(const QString &name, const std::function<QString(const QString &)> &submit) {
-        m_rename = submit; m_title->setText(u8("Переименовать: нажмите Enter"));
+    void startRename(const QString &name, const std::function<QString(const QString &)> &submit, const QString &title) {
+        m_rename = submit; m_title->setText(title);
         m_field->setText(name); setCursorPos(name.size());
     }
     ~SearchWindow() { qApp->removeEventFilter(this); if (g_search == this) g_search = nullptr; }
@@ -1802,13 +1806,14 @@ static void ksearch_open() {
     klog(u8("ksearch window shown"));
 }
 
-static void krename_open(const QString &name, const std::function<QString(const QString &)> &submit) {
+static void krename_open(const QString &name, const std::function<QString(const QString &)> &submit,
+                         const QString &title = u8("Переименовать: нажмите Enter")) {
     if (g_search) return;
     QWidget *host = koboHostWindow();
     if (!host) return;
     g_search = new SearchWindow(host);
     attachSleepWindow(g_search);
-    g_search->startRename(name, submit);
+    g_search->startRename(name, submit, title);
     g_search->setGeometry(host->rect());
     g_search->show(); g_search->raise();
 }
@@ -1954,7 +1959,7 @@ public:
         lay->setContentsMargins(GAP, qMax(4, qRound(8 * SCREEN_DPI / 300.0)), GAP, GAP);
         lay->setSpacing(qMax(4, GAP / 2));
 
-        m_deviceStatus = new DeviceStatusBar(this);
+        m_deviceStatus = new DeviceStatusBar(this, u8("/sys/class/power_supply"), m_root);
         QFont statusFont(u8("Sans Serif")); statusFont.setStyleHint(QFont::SansSerif);
         const QStringList statusFamilies = QFontDatabase().families();
         const char *statusPreferred[] = { "Avenir Next", "Avenir", "Rakuten Sans UI App", "Kobo Nickel" };
@@ -2015,6 +2020,23 @@ public:
         m_pathLabel->setTextFormat(Qt::PlainText);
         m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:6px;"));
         lay->addWidget(m_pathLabel);
+
+        // The header and the delegate use matching 54/27/19 column widths.
+        m_columnHeader = new QWidget(this);
+        QHBoxLayout *columns = new QHBoxLayout(m_columnHeader);
+        columns->setContentsMargins(0, 0, 0, 0); columns->setSpacing(0);
+        const char *columnLabels[] = { "Название", "Дата", "Размер" };
+        const int widths[] = { 54, 27, 19 };
+        for (int n = 0; n < 3; ++n) {
+            QPushButton *button = new QPushButton(u8(columnLabels[n]), m_columnHeader);
+            button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(fList);
+            button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+            button->setMinimumHeight(qMax(48, QFontMetrics(fList).lineSpacing() + 12));
+            button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;} QPushButton:pressed{background:black;color:white;}"));
+            m_sortButtons << button; columns->addWidget(button, widths[n]);
+            connect(button, &QPushButton::clicked, [this, n]() { setSort(static_cast<BrowserSort>(n)); });
+        }
+        updateSortHeader(); lay->addWidget(m_columnHeader);
 
         // Список файлов и папок
         m_list = new QTreeWidget(this);
@@ -2162,7 +2184,7 @@ public:
         m_holdTimer.setInterval(LONG_TAP_MS);
         connect(&m_holdTimer, &QTimer::timeout, this, [this]() {
             if (m_moved || m_twoFinger) return;
-            if (m_holdBlank && !m_clip.isEmpty()) {
+            if (m_holdBlank) {
                 m_holdFired = true; m_menuRequested = true; updateActions(); return;
             }
             if (m_holdPath.isEmpty()) return;
@@ -2327,7 +2349,7 @@ protected:
                 if (item && !item->data(0, ROLE_PARENT).toBool()) {
                     m_holdPath = item->data(0, ROLE_PATH).toString();
                     if (!m_holdPath.isEmpty()) m_holdTimer.start();
-                } else if (!m_clip.isEmpty()) {
+                } else {
                     m_holdBlank = true; m_holdTimer.start();
                 }
             }
@@ -2662,14 +2684,14 @@ private:
         for (int i = 0; i < m_list->topLevelItemCount(); ++i) setMarkedLook(m_list->topLevelItem(i), false);
     }
 
-    enum MenuAction { ActCopy, ActCut, ActDelete, ActZip, ActHome, ActRename, ActPaste, ActClose };
+    enum MenuAction { ActCopy, ActCut, ActDelete, ActZip, ActHome, ActRename, ActPaste, ActClose, ActMkdir };
 
     void placeActionMenu() {
         if (!m_actions) return;
         const QFontMetrics fm(m_actions->font());
         int widthNeeded = 0, heightNeeded = 6;
         const char *allLabels[] = { "Сделать домашней", "Вырезать", "Копировать", "Вставить",
-                                    "Архивировать", "Удалить", "Переименовать", "Закрыть меню" };
+                                    "Архивировать", "Удалить", "Переименовать", "Создать папку", "Закрыть меню" };
         for (const char *label : allLabels) widthNeeded = qMax(widthNeeded, fm.width(u8(label)));
         for (int i = 0; i < m_actions->topLevelItemCount(); ++i)
             heightNeeded += m_actions->topLevelItem(i)->sizeHint(0).height();
@@ -2700,6 +2722,8 @@ private:
                     << ActionMenuEntry(u8("Удалить"), ActDelete, row);
             if (m_marked.size() == 1) entries << ActionMenuEntry(u8("Переименовать"), ActRename, row);
         }
+        if (safeLocalPath(m_root, m_path) && writableLocalDirectory(m_root, m_path, ALLOW_ADDS))
+            entries << ActionMenuEntry(u8("Создать папку"), ActMkdir, row);
         entries << ActionMenuEntry(QString(), 0, separator, false)
                 << ActionMenuEntry(u8("Закрыть меню"), ActClose, row);
         const bool changed = syncActionMenu(m_actions, entries);
@@ -2724,6 +2748,7 @@ private:
             } else { clearSelection(); showMessage(u8("Не удалось сохранить домашнюю папку")); }
             break;
         case ActRename: startRename(); break;
+        case ActMkdir: startCreateFolder(); break;
         case ActPaste: paste(); break;
         case ActClose: clearSelection(); break;
         default: break;
@@ -2751,6 +2776,22 @@ private:
             self->showMessage(u8("Переименовано: ") + name);
             return QString();
         });
+    }
+
+    void startCreateFolder() {
+        const QString parent = m_path;
+        if (!safeLocalPath(m_root, parent) || !writableLocalDirectory(m_root, parent, ALLOW_ADDS)) {
+            clearSelection(); showMessage(u8("Папка недоступна для изменений")); return;
+        }
+        clearSelection();
+        QPointer<KobrowseWindow> self(this);
+        krename_open(QString(), [self, parent](const QString &name) -> QString {
+            if (!self) return u8("Окно закрыто");
+            QString error;
+            if (!createLocalDirectory(self->m_root, parent, name, error, ALLOW_ADDS)) return error;
+            self->load(); self->showMessage(u8("Папка создана: ") + name);
+            return QString();
+        }, u8("Создать папку: нажмите Enter"));
     }
 
     // Копировать / Вырезать: запомнить отмеченное, снять выбор
@@ -2978,9 +3019,21 @@ private:
         if (!remaining.isEmpty()) showMessage(u8("Не перенесено в корзину: %1").arg(remaining.size()));
     }
 
+    void updateSortHeader() {
+        const char *labels[] = { "Название", "Дата", "Размер" };
+        for (int n = 0; n < m_sortButtons.size(); ++n)
+            m_sortButtons[n]->setText(u8(labels[n]) + (n == int(m_sort) ? (m_sortAscending ? u8(" ↑") : u8(" ↓")) : QString()));
+    }
+    void setSort(BrowserSort column) {
+        if (column == m_sort) m_sortAscending = !m_sortAscending;
+        else { m_sort = column; m_sortAscending = true; }
+        updateSortHeader(); load();
+    }
+
     // Прочитать текущую папку и заполнить список
     void load() {
         m_emptyTrashButton->setVisible(m_path == m_trash);
+        m_deviceStatus->refresh();
         m_pathLabel->setPath(m_root, m_path);
         m_fileCount = 0; m_dirCount = 0; m_pageIndex = 0; m_pageStarts.clear();
         m_list->clear();
@@ -2996,7 +3049,8 @@ private:
         // Папки сверху, по имени без учёта регистра; список читается разом,
         // дескрипторы на /mnt/onboard не удерживаются (важно для USB-режима)
         const QFileInfoList qtEntries = browserQtEntries(dir, m_showHidden);
-        const QFileInfoList entries = completeBrowserEntries(dir, qtEntries, m_showHidden);
+        QFileInfoList entries = completeBrowserEntries(dir, qtEntries, m_showHidden);
+        sortBrowserEntries(entries, m_sort, m_sortAscending);
         if (m_path == m_root && !m_rootDiagLogged) {
             m_rootDiagLogged = true;
             bool qtAdds = false, qtDisabled = false, shownAdds = false, shownDisabled = false;
@@ -3047,6 +3101,8 @@ private:
             const bool readOnly = readOnlyLocalEntry(m_root, m_trash, path, ALLOW_ADDS);
             if (readOnly) detail += u8("  ·  защищено");
             it->setData(0, ROLE_DETAIL, detail);
+            it->setData(0, ROLE_DATE, fi.lastModified().toString(u8("dd.MM.yy\nhh:mm")));
+            it->setData(0, ROLE_SIZE, isDir || fi.isSymLink() ? u8("—") : humanSize(fi.size()));
             it->setData(0, ROLE_PATH, path);
             it->setData(0, ROLE_DIR, isDir);
             it->setData(0, ROLE_READONLY, readOnly);
@@ -3489,6 +3545,7 @@ private:
             setSettingsTab(false);
         }
         m_list->setVisible(!on);
+        m_columnHeader->setVisible(!on);
         m_pathLabel->setVisible(!on);
         m_nav->setVisible(!on);
         m_toolbar->setVisible(!on);
@@ -3617,6 +3674,7 @@ private:
         QFont listFont = LIST_FONT.isEmpty() ? font() : QFont(LIST_FONT);
         listFont.setPixelSize(LIST_PX);
         m_list->setFont(listFont); m_fileDelegate->setListFont(listFont);
+        for (QPushButton *button : m_sortButtons) button->setFont(listFont);
         m_actions->setFont(listFont);
         m_resetHomeDraft = false; updateHomeDraft();
         clearSelection(); load();
@@ -3673,6 +3731,10 @@ private:
     QStringList   m_clip;            // буфер: пути для вставки
     bool          m_clipCut = false; // буфер «вырезан» (перенос) или «скопирован»
     QTreeWidget  *m_list = nullptr;
+    QWidget *m_columnHeader = nullptr;
+    QVector<QPushButton *> m_sortButtons;
+    BrowserSort m_sort = SortName;
+    bool m_sortAscending = true;
     QLabel       *m_info = nullptr;
     BrowserPathLabel *m_pathLabel = nullptr;
     FooterNotice *m_footerNotice = nullptr, *m_settingsNotice = nullptr;

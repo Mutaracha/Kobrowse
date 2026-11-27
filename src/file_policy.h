@@ -2,6 +2,7 @@
 #define KOBROWSE_FILE_POLICY_H
 
 #include <QDir>
+#include <QDateTime>
 #include <QFileInfo>
 #include <QFile>
 #include <QSet>
@@ -46,6 +47,24 @@ inline QFileInfoList completeBrowserEntries(const QDir &dir, const QFileInfoList
     ::closedir(raw);
     if (added) std::stable_sort(entries.begin(), entries.end(), browserEntryLess);
     return entries;
+}
+
+// Directories stay above files in both directions; ties are deterministic.
+enum BrowserSort { SortName, SortDate, SortSize };
+inline void sortBrowserEntries(QFileInfoList &entries, BrowserSort sort, bool ascending) {
+    std::stable_sort(entries.begin(), entries.end(), [sort, ascending](const QFileInfo &a, const QFileInfo &b) {
+        if (a.isDir() != b.isDir()) return a.isDir();
+        int cmp = 0;
+        if (sort == SortDate) {
+            const QDateTime aa = a.lastModified(), bb = b.lastModified();
+            cmp = aa < bb ? -1 : aa > bb ? 1 : 0;
+        } else if (sort == SortSize && !a.isDir()) {
+            cmp = a.size() < b.size() ? -1 : a.size() > b.size() ? 1 : 0;
+        }
+        if (!cmp) cmp = QString::compare(a.fileName(), b.fileName(), Qt::CaseInsensitive);
+        if (!cmp) cmp = QString::compare(a.fileName(), b.fileName(), Qt::CaseSensitive);
+        return ascending ? cmp < 0 : cmp > 0;
+    });
 }
 
 inline QFileInfoList browserEntries(const QDir &dir, bool showHidden) {

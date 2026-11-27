@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QTime>
 #include <QTimer>
+#include <sys/statvfs.h>
 #include <QGuiApplication>
 
 #ifndef KOBROWSE_BUILD_NUMBER
@@ -60,12 +61,14 @@ private:
 };
 class DeviceStatusBar : public QWidget {
 public:
-    explicit DeviceStatusBar(QWidget *parent = nullptr, const QString &powerDirectory = QString::fromLatin1("/sys/class/power_supply"))
-        : QWidget(parent), powerDirectory(powerDirectory) {
+    explicit DeviceStatusBar(QWidget *parent = nullptr, const QString &powerDirectory = QString::fromLatin1("/sys/class/power_supply"),
+                             const QString &storageDirectory = QString::fromLatin1("/mnt/onboard"))
+        : QWidget(parent), powerDirectory(powerDirectory), storageDirectory(storageDirectory) {
         QHBoxLayout *row = new QHBoxLayout(this); row->setContentsMargins(0, 0, 0, 0);
         m_clock = new QLabel(this); m_clock->setObjectName(QLatin1String("statusClock")); row->addWidget(m_clock); row->addStretch(1);
         m_build = new QLabel(QString::fromLatin1("#%1 %2").arg(QLatin1String(KOBROWSE_BUILD_NUMBER), QLatin1String(KOBROWSE_BUILD_COMMIT)), this);
-        m_build->setObjectName(QLatin1String("statusBuild")); row->addWidget(m_build); row->addStretch(1);
+        m_build->setObjectName(QLatin1String("statusBuild")); row->addWidget(m_build);
+        m_free = new QLabel(this); m_free->setObjectName(QLatin1String("statusFree")); row->addWidget(m_free); row->addStretch(1);
         m_battery = new QLabel(this); m_battery->setObjectName(QLatin1String("statusBattery")); row->addWidget(m_battery);
         m_icon = new BatteryIcon(this); row->addWidget(m_icon);
         connect(&timer, &QTimer::timeout, this, [this]() { refresh(); });
@@ -94,6 +97,7 @@ public:
             .arg(family).arg(font.pixelSize());
         m_clock->setFont(font); m_clock->setStyleSheet(style);
         m_build->setFont(font); m_build->setStyleSheet(style);
+        m_free->setFont(font); m_free->setStyleSheet(style);
         m_battery->setFont(font); m_battery->setStyleSheet(style);
     }
     void setScale(qreal scale) {
@@ -108,10 +112,19 @@ public:
             : QString::number(battery.percent) + QLatin1String("%") + (battery.charging ? QLatin1String(" +") : QLatin1String(""));
         if (m_battery->text() != text) m_battery->setText(text);
         m_icon->setBattery(battery);
+        struct statvfs fs;
+        QString freeText = QString::fromUtf8("Своб.: --");
+        if (::statvfs(QFile::encodeName(storageDirectory).constData(), &fs) == 0) {
+            const double bytes = double(fs.f_bavail) * double(fs.f_frsize ? fs.f_frsize : fs.f_bsize);
+            freeText = bytes >= 1024.0 * 1024 * 1024
+                ? QString::fromUtf8("Своб.: %1 ГБ").arg(bytes / (1024.0 * 1024 * 1024), 0, 'f', 1)
+                : QString::fromUtf8("Своб.: %1 МБ").arg(bytes / (1024.0 * 1024), 0, 'f', 0);
+        }
+        if (m_free->text() != freeText) m_free->setText(freeText);
     }
 private:
-    QString powerDirectory;
-    QLabel *m_clock = nullptr, *m_build = nullptr, *m_battery = nullptr;
+    QString powerDirectory, storageDirectory;
+    QLabel *m_clock = nullptr, *m_build = nullptr, *m_free = nullptr, *m_battery = nullptr;
     BatteryIcon *m_icon = nullptr;
     QTimer timer, brightnessTimer;
 };
