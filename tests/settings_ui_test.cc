@@ -85,9 +85,30 @@ class SettingsUiTest {
             require(!shown.contains(QLatin1Char('\n')), "file name remains a single line");
             const int available = browserColumns(w.m_list->viewport()->width(), w.m_list->font()).name - qMax(32, 2 * ICON_PX) - 18;
             require(QFontMetrics(w.m_list->font()).width(shown) <= available, "elided name fits viewport");
-            if (shown != name) require(shown.endsWith(QString::fromUtf8(".epub")), "elision preserves extension");
+            require(shown.startsWith(QLatin1Char('A')) && !shown.contains(QString::fromUtf8(".epub")), "known extensions hidden and beginning retained");
+            if (shown.endsWith(QString::fromUtf8("…"))) require(!shown.contains(QString::fromUtf8("ending")), "name elides only at the end");
+            require(index.data().toString() == name, "model keeps complete filename");
         }
         w.resize(768, 1024); QApplication::processEvents();
+        const char *known[] = {"book.FB2", "book.epub", "image.png", "archive.zip", "book.mobi"};
+        for (const char *n : known) {
+            model.setData(index, QString::fromUtf8(n), Qt::DisplayRole);
+            require(!w.m_fileDelegate->displayedName(index).contains(QLatin1Char('.')), "known file type hides extension");
+        }
+        model.setData(index, QString::fromUtf8("book.unknown"), Qt::DisplayRole);
+        require(w.m_fileDelegate->displayedName(index) == QString::fromUtf8("book.unknown"), "unknown extension remains visible");
+        model.setData(index, QString::fromUtf8("book.epub"), Qt::DisplayRole);
+        model.setData(index, true, ROLE_DIR);
+        require(w.m_fileDelegate->displayedName(index) == QString::fromUtf8("book.epub"), "directory extension-like suffix remains visible");
+        model.setData(index, false, ROLE_DIR); model.setData(index, QString::fromUtf8(".pdf"), Qt::DisplayRole);
+        require(w.m_fileDelegate->displayedName(index) == QString::fromUtf8(".pdf"), "dot-only basename not made empty");
+        model.setData(index, QString::fromUtf8(".."), Qt::DisplayRole); model.setData(index, true, ROLE_DIR);
+        model.setData(index, true, ROLE_PARENT);
+        QStyleOptionViewItem option;
+        const int parentHeight = w.m_fileDelegate->sizeHint(option, index).height();
+        model.setData(index, false, ROLE_PARENT); model.setData(index, QString::fromUtf8("folder"), Qt::DisplayRole);
+        model.setData(index, QString::fromUtf8("01.01.26\n12:34"), ROLE_DATE);
+        require(w.m_fileDelegate->sizeHint(option, index).height() == parentHeight, "parent and ordinary folder row heights match");
     }
     static void testPathLabel(KobrowseWindow &w) {
         const QFont font = w.m_pathLabel->font(); const QFontMetrics fm(font);
@@ -270,9 +291,16 @@ public:
         require(w.m_sortButtons[0]->text() == QString::fromUtf8("↑  Название")
                 && w.m_sortButtons[1]->text() == QString::fromUtf8("Дата")
                 && w.m_sortButtons[2]->text() == QString::fromUtf8("Размер"), "headers show labels and left-aligned active arrow");
-        require(w.m_sortButtons[0]->font().pixelSize() < clock->font().pixelSize()
+        require(w.m_sortButtons[0]->font().pixelSize() == qRound(qMax(10, clock->font().pixelSize() * 3 / 4) * 1.5)
                 && w.m_sortButtons[0]->styleSheet().contains("text-align:left")
-                && w.m_sortButtons[0]->styleSheet().contains("padding-right:4px"), "header font is smaller with side padding");
+                && w.m_sortButtons[0]->styleSheet().contains("padding-right:8px"), "header font enlarged 1.5 times with larger side padding");
+        require(LIST_DETAIL_PX == ptToPx(8.0), "date and size default to half a point below list font");
+        require(!w.m_pageStarts.empty() && !w.m_pageTimer.isActive(), "visible load paginates before a deferred repaint");
+        for (int n = 1; n < 3; ++n) {
+            const QString widest = QString::fromUtf8("↓  ") + (n == 1 ? QString::fromUtf8("Дата") : QString::fromUtf8("Размер"));
+            require(QFontMetrics(w.m_sortButtons[n]->font()).width(widest) + 18 <= w.m_sortButtons[n]->width(),
+                    "active column label and arrow fit with padding");
+        }
         require(w.m_footerLine->styleSheet().contains("background:black"), "footer separator is black");
         require(w.m_pageLabel->font().family() == clock->font().family()
                 && w.m_countLabel->font().family() == clock->font().family(), "footer uses status Avenir family");
@@ -289,6 +317,19 @@ public:
             control->setDown(false);
             require(before == pressed, "toolbar icon does not invert background on press");
         }
+        QPushButton *homeButton = nullptr;
+        for (QPushButton *candidate : w.m_toolbar->findChildren<QPushButton *>())
+            if (candidate->accessibleName() == QString::fromUtf8("Домашняя папка")) homeButton = candidate;
+        require(homeButton, "home button exists");
+        QImage homeIcon(homeButton->size(), QImage::Format_RGB32); homeIcon.fill(Qt::white); homeButton->render(&homeIcon);
+        QImage trashIcon(w.m_trashButton->size(), QImage::Format_RGB32); trashIcon.fill(Qt::white); w.m_trashButton->render(&trashIcon);
+        int homeTop = homeIcon.height(), homeBottom = -1, trashTop = trashIcon.height(), trashBottom = -1;
+        for (int y = 0; y < homeIcon.height(); ++y) for (int x = 0; x < homeIcon.width(); ++x) {
+            if (QColor(homeIcon.pixel(x, y)).lightness() < 100) { homeTop = qMin(homeTop, y); homeBottom = qMax(homeBottom, y); }
+            if (QColor(trashIcon.pixel(x, y)).lightness() < 100) { trashTop = qMin(trashTop, y); trashBottom = qMax(trashBottom, y); }
+        }
+        require(trashBottom - trashTop >= (homeBottom - homeTop) * 9 / 10, "trash icon height matches other toolbar icons");
+        require(qAbs((trashTop + trashBottom) - (homeTop + homeBottom)) <= 6, "trash icon vertically aligned");
         require(sleepRecoveryAllowed(true, false, false, false, false), "restore only when native views clear");
         require(!sleepRecoveryAllowed(false, false, false, false, false)
             && !sleepRecoveryAllowed(true, true, false, false, false)
@@ -325,6 +366,9 @@ public:
             if (item->data(0, ROLE_DIR).toBool() && !item->data(0, ROLE_PARENT).toBool())
                 previousDirs << item->data(0, ROLE_PATH).toString();
         }
+        std::sort(previousDirs.begin(), previousDirs.end(), [](const QString &a, const QString &b) {
+            return browserEntryLess(QFileInfo(a), QFileInfo(b));
+        });
         w.m_sortButtons[2]->click(); require(w.m_sort == SortSize && w.m_sortAscending, "size column sorts");
         for (int direction = 0; direction < 2; ++direction) {
             QStringList dirs;
@@ -335,7 +379,7 @@ public:
                     require(item->data(0, ROLE_SIZE).toString().isEmpty(), "directory size blank");
                 }
             }
-            require(dirs == previousDirs, "size sort preserves displayed directory order in both directions");
+            require(dirs == previousDirs, "size sort always uses ascending directory names");
             w.m_sortButtons[2]->click();
         }
         w.m_sortButtons[0]->click(); require(w.m_sort == SortName && w.m_sortAscending, "name column sorts");
@@ -534,6 +578,7 @@ public:
         first->click(); require(w.m_setVals[family].isEmpty() && first->isSelected(), "Kobo font applies immediately");
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
+        require(LIST_DETAIL_PX == ptToPx(8.5), "detail font follows list setting minus half a point");
         require(w.m_actions->font().pixelSize() == ptToPx(12) && w.m_actions->font().family() == w.m_list->font().family(),
                 "context menu size remains fixed as list size changes");
         reset->click(); no->click(); require(LIST_PX > beforeFont, "reset cancellation preserves setting");

@@ -102,7 +102,7 @@ static QString u8(const char *s) { return QString::fromUtf8(s); }
 
 // ---------- внешний вид: значения из kobrowse.ini (пересчитаны в пиксели) ----------
 // Заполняются loadConfig() при каждом открытии менеджера.
-static int     LIST_PX, FONT_BTN, FONT_MSG, GAP, BTN_MARGIN, BTN_HEIGHT, ICON_PX, LONG_TAP_MS;
+static int     LIST_PX, LIST_DETAIL_PX, FONT_BTN, FONT_MSG, GAP, BTN_MARGIN, BTN_HEIGHT, ICON_PX, LONG_TAP_MS;
 static qreal   BTN_RADIUS, BTN_PEN;
 static QString LIST_FONT, BTN_FONT;
 // Клавиатура поиска (перенесена из ksearch): 0 — кегль считается от высоты клавиши.
@@ -264,7 +264,9 @@ static void loadConfig() {
         return (ok && v >= lo && v <= hi) ? v : def;
     };
     OPEN_BOOKS  = canUpdate ? st.value(u8("kobrowse/open_books")).toString().trimmed().toLower() : QString();
-    LIST_PX     = ptToPx(qBound(7.0, num("list_pt", 8.5, 4, 24), 14.0));
+    const double listPt = qBound(7.0, num("list_pt", 8.5, 4, 24), 14.0);
+    LIST_PX = ptToPx(listPt);
+    LIST_DETAIL_PX = ptToPx(listPt - 0.5);
     // Fixed Kobo-proportional chrome; legacy appearance keys are preserved but ignored.
     const double uiScale = SCREEN_DPI / 300.0;
     FONT_BTN = qRound(32 * uiScale); FONT_MSG = qRound(30 * uiScale); GAP = qRound(16 * uiScale);
@@ -357,10 +359,15 @@ static qreal layoutText(const QString &text, const QFont &f, qreal width,
 // Share exact pixel boundaries between header hit areas and painted rows.
 struct BrowserColumns { int name, date, size; };
 static BrowserColumns browserColumns(int width, const QFont &listFont) {
-    QFont detail = listFont; detail.setPixelSize(qMax(10, listFont.pixelSize() * 3 / 4));
+    QFont detail = listFont; detail.setPixelSize(qMax(10, LIST_DETAIL_PX));
     const QFontMetrics fm(detail);
-    int date = fm.width(u8("88.88.88")) + 12;
-    int size = fm.width(u8("888.8 МБ")) + 12;
+    // Allow for the arrow, label and padding even when the column is active.
+    QFont header = listFont;
+    header.setPixelSize(qRound(qMax(10, qMax(12, qRound(26 * SCREEN_DPI / 300.0)) * 3 / 4) * 1.5));
+    const QFontMetrics hm(header);
+    const int inset = qMax(6, qRound(8 * SCREEN_DPI / 300.0));
+    int date = qMax(fm.width(u8("88.88.88")) + 12, hm.width(u8("↓  Дата")) + 2 * inset + 2);
+    int size = qMax(fm.width(u8("888.8 МБ")) + 12, hm.width(u8("↓  Размер")) + 2 * inset + 2);
     const int budget = qMax(2, width - qMax(qMax(32, ICON_PX * 2) + 24, width / 3));
     if (date + size > budget) {
         date = qMax(1, budget * date / (date + size));
@@ -381,11 +388,17 @@ public:
         name.replace(QLatin1Char('\n'), QLatin1Char(' '));
         name.replace(QLatin1Char('\r'), QLatin1Char(' '));
         name.replace(QLatin1Char('\t'), QLatin1Char(' '));
-        return QFontMetrics(fontFor(idx)).elidedText(name, Qt::ElideMiddle, int(textWidth()));
+        // The model retains the full name for every file operation and sort.
+        if (!idx.data(ROLE_DIR).toBool() && fileKind(name) != FileGeneric) {
+            const int dot = name.lastIndexOf(QLatin1Char('.'));
+            if (dot > 0) name.truncate(dot);
+        }
+        return QFontMetrics(fontFor(idx)).elidedText(name, Qt::ElideRight, int(textWidth()));
     }
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &idx) const override {
         const qreal h = layoutText(displayedName(idx), fontFor(idx), textWidth());
-        const int detailHeight = idx.data(ROLE_DATE).toString().isEmpty() ? 0 : QFontMetrics(detailFont()).lineSpacing() * 2;
+        // Parent row uses the same two-line minimum as entries with a date.
+        const int detailHeight = QFontMetrics(detailFont()).lineSpacing() * 2;
         const int wanted = qMax(iconSize(), qMax(int(h), detailHeight)) + 2 * PAD_V + 1;
         return QSize(m_view->width(), m_maxHeight > 0 ? qMin(wanted, m_maxHeight) : wanted);
     }
@@ -537,7 +550,7 @@ public:
 private:
     enum { PAD_V = 10, PAD_H = 6 };
     int iconSize() const { return qMax(32, ICON_PX * 2); }
-    QFont detailFont() const { QFont f = m_font; f.setPixelSize(qMax(10, m_font.pixelSize() * 3 / 4)); return f; }
+    QFont detailFont() const { QFont f = m_font; f.setPixelSize(qMax(10, LIST_DETAIL_PX)); return f; }
     QFont fontFor(const QModelIndex &idx) const {
         QFont f = m_font;
         f.setBold(idx.data(ROLE_DIR).toBool());
@@ -814,7 +827,7 @@ protected:
             p.setBrush(pressed ? Qt::black : Qt::white); p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), BTN_RADIUS, BTN_RADIUS);
         }
         const int iconSize = qRound(ICON_PX * m_iconScale * ((m_icon == I_CHEV_UP || m_icon == I_CHEV_DOWN) ? 1.6 : 1.0));
-        const int size = m_largePlainIcon ? qRound(qMin(height(), width()) * 1.08)
+        const int size = m_largePlainIcon ? qRound(qMin(height(), width()) * 1.08 * m_iconScale)
                                           : qMin(iconSize, qMin(height() - 8, width() - 8));
         if (size <= 0) return;
         const int left = m_text.isEmpty() ? (width() - size) / 2 : (m_framed ? 12 : 4);
@@ -2165,10 +2178,12 @@ public:
         home->setLargePlainIcon(true); home->setAccessibleName(u8("Домашняя папка")); home->setFixedSize(chromeHeight, chromeHeight);
         toolbar->addWidget(home);
         connect(home, &QPushButton::clicked, [this]() {
-            clearSelection(); m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME)); load();
+            m_menuRequested = false; m_actions->hide(); m_info->hide();
+            m_marked.clear(); m_selectionOrder.clear();
+            m_path = readHomeFolder(m_root, u8(KOBROWSE_HOME)); load();
         });
         m_trashButton = new ChromeButton(I_TRASH, QString(), m_toolbar);
-        m_trashButton->setLargePlainIcon(true); m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
+        m_trashButton->setLargePlainIcon(true); m_trashButton->setIconScale(1.18); m_trashButton->setAccessibleName(u8("Открыть корзину")); m_trashButton->setFixedSize(chromeHeight, chromeHeight);
         m_trashButton->setVisible(TRASH_ENABLED); toolbar->addWidget(m_trashButton);
         connect(m_trashButton, &QPushButton::clicked, [this]() { if (pathWithin(m_path, m_trash)) { m_path = m_trash; goUp(); } else openTrash(); });
         m_emptyTrashButton = new ChromeButton(I_TRASH, u8("Очистить корзину"), m_toolbar, true);
@@ -2205,11 +2220,12 @@ public:
             QPushButton *button = new QPushButton(m_columnHeader);
             const char *names[] = { "Сортировать по имени", "Сортировать по дате", "Сортировать по размеру" };
             button->setAccessibleName(u8(names[n]));
-            QFont headerFont = statusFont; headerFont.setPixelSize(qMax(10, statusFont.pixelSize() * 3 / 4));
+            QFont headerFont = statusFont; headerFont.setPixelSize(qRound(qMax(10, statusFont.pixelSize() * 3 / 4) * 1.5));
             button->setObjectName(u8("sortColumn_%1").arg(n)); button->setFont(headerFont);
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
             button->setMinimumHeight(qMax(48, QFontMetrics(statusFont).lineSpacing() + 12));
-            button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;text-align:left;padding-left:4px;padding-right:4px;} QPushButton:pressed{background:black;color:white;}"));
+            const int inset = qMax(6, qRound(8 * SCREEN_DPI / 300.0));
+            button->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;color:black;text-align:left;padding-left:%1px;padding-right:%1px;} QPushButton:pressed{background:black;color:white;}").arg(inset));
             m_sortButtons << button; m_columnHeader->addColumn(button);
             connect(button, &QPushButton::clicked, [this, n]() { setSort(static_cast<BrowserSort>(n)); });
         }
@@ -3208,14 +3224,6 @@ private:
             m_sortButtons[n]->setText((n == int(m_sort) ? (m_sortAscending ? u8("↑  ") : u8("↓  ")) : QString()) + u8(labels[n]));
     }
     void setSort(BrowserSort column) {
-        if (column == SortSize && m_sort != SortSize) {
-            m_directoryOrder.clear(); m_directoryOrderPath = m_path;
-            for (int i = 0; i < m_list->topLevelItemCount(); ++i) {
-                QTreeWidgetItem *item = m_list->topLevelItem(i);
-                if (item->data(0, ROLE_DIR).toBool() && !item->data(0, ROLE_PARENT).toBool())
-                    m_directoryOrder << item->data(0, ROLE_PATH).toString();
-            }
-        }
         if (column == m_sort) m_sortAscending = !m_sortAscending;
         else { m_sort = column; m_sortAscending = true; }
         updateSortHeader(); load();
@@ -3241,8 +3249,7 @@ private:
         // дескрипторы на /mnt/onboard не удерживаются (важно для USB-режима)
         const QFileInfoList qtEntries = browserQtEntries(dir, m_showHidden);
         QFileInfoList entries = completeBrowserEntries(dir, qtEntries, m_showHidden);
-        if (m_directoryOrderPath != m_path) { m_directoryOrder.clear(); m_directoryOrderPath = m_path; }
-        sortBrowserEntries(entries, m_sort, m_sortAscending, m_directoryOrder);
+        sortBrowserEntries(entries, m_sort, m_sortAscending);
         if (m_path == m_root && !m_rootDiagLogged) {
             m_rootDiagLogged = true;
             bool qtAdds = false, qtDisabled = false, shownAdds = false, shownDisabled = false;
@@ -3303,7 +3310,11 @@ private:
         }
         m_list->scrollToTop();
         m_list->doItemsLayout();
-        m_pageTimer.start(0);
+        // Set the first page before Qt paints the newly loaded model, avoiding
+        // an extra intermediate full-list repaint during navigation.
+        m_pageTimer.stop();
+        if (m_list->isVisible() && m_list->viewport()->height() > 1) recalculatePages();
+        else m_pageTimer.start(0);
     }
 
     void recalculatePages() {
@@ -3926,8 +3937,6 @@ private:
     QWidget *m_pathHeader = nullptr;
     BrowserColumnHeader *m_columnHeader = nullptr;
     QVector<QPushButton *> m_sortButtons;
-    QStringList m_directoryOrder;
-    QString m_directoryOrderPath;
     BrowserSort m_sort = SortName;
     bool m_sortAscending = true;
     QLabel       *m_info = nullptr;

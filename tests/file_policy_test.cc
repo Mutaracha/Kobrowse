@@ -114,19 +114,15 @@ int main(int argc, char **argv) {
     require(sorted.first().isDir() && sorted.at(1).size() <= sorted.at(2).size(), "sort sizes numerically ascending");
     sortBrowserEntries(sorted, SortSize, false);
     require(sorted.first().isDir() && sorted.at(1).size() >= sorted.at(2).size(), "sort sizes numerically descending");
-    const QStringList directoryOrder = QStringList() << root + "/Excluded" << root + "/Books" << root + "/.adds";
+    const QStringList expectedDirs = QStringList() << root + "/.adds" << root + "/Books" << root + "/Excluded";
     for (int direction = 0; direction < 2; ++direction) {
         QFileInfoList dirs;
-        dirs << QFileInfo(root + "/.adds") << QFileInfo(root + "/Books") << QFileInfo(root + "/Excluded")
+        dirs << QFileInfo(root + "/Excluded") << QFileInfo(root + "/Books") << QFileInfo(root + "/.adds")
              << QFileInfo(root + "/Books/book.epub");
-        sortBrowserEntries(dirs, SortSize, direction == 0, directoryOrder);
-        for (int i = 0; i < directoryOrder.size(); ++i)
-            require(dirs.at(i).absoluteFilePath() == directoryOrder.at(i), "size sort preserves explicit directory order");
+        sortBrowserEntries(dirs, SortSize, direction == 0);
+        for (int i = 0; i < expectedDirs.size(); ++i)
+            require(dirs.at(i).absoluteFilePath() == expectedDirs.at(i), "size sort keeps folders in ascending name order in either direction");
     }
-    QFileInfoList newDirs; newDirs << QFileInfo(root + "/Excluded") << QFileInfo(root + "/Books");
-    sortBrowserEntries(newDirs, SortSize, false);
-    require(newDirs.at(0).fileName() == "Books" && newDirs.at(1).fileName() == "Excluded",
-            "new directory order is deterministic regardless of size direction");
     require(contains(browserEntries(QDir(root), true), ".adds"), "hidden folder visible");
     require(contains(browserEntries(QDir(root), true), "Excluded"), "excluded folder visible");
     require(!contains(browserEntries(QDir(root), false), ".adds"), "hidden folder disabled");
