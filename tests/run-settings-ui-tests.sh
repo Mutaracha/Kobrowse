@@ -6,5 +6,6 @@ build=$(mktemp -d "$root/build/settings-test.XXXXXX")
 trap 'rm -rf "$build"' EXIT
 c++ -std=gnu++11 -fPIC -Wall -Wextra -Wno-missing-field-initializers \
     -I"$root/NickelHook" "$root/tests/settings_ui_test.cc" "$root/src/zip_writer.cc" \
+    "$root/src/zip_validator.cc" "$root/src/zip_extract.cc" \
     $(pkg-config --cflags --libs Qt5Widgets) -lz -ldl -o "$build/settings-test"
 QT_QPA_PLATFORM=offscreen "$build/settings-test"

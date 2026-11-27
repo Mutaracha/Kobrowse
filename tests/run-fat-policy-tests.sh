@@ -17,6 +17,9 @@ cleanup() {
 trap cleanup EXIT
 c++ -std=c++11 -fPIC -Wall -Wextra "$root/tests/fat_policy_test.cc" \
     $(pkg-config --cflags --libs Qt5Core) -o "$build/fat-policy-test"
+c++ -std=c++11 -fPIC -Wall -Wextra "$root/tests/zip_extract_driver.cc" \
+    "$root/src/zip_validator.cc" "$root/src/zip_extract.cc" \
+    $(pkg-config --cflags --libs Qt5Core) -lz -o "$build/zip-extract"
 truncate -s 64M "$build/fixture.img"
 mkfs.vfat "$build/fixture.img" >/dev/null
 mkdir "$build/mount"
@@ -24,3 +27,4 @@ sudo -n mount -t vfat -o "loop,uid=$(id -u),gid=$(id -g),utf8=1" "$build/fixture
 mounted=1
 [[ $(stat -f -c %T "$build/mount") == msdos ]] || { echo "Not a FAT filesystem" >&2; exit 1; }
 "$build/fat-policy-test" "$build/mount"
+python3 "$root/tests/check_fat_extract.py" "$build/zip-extract" "$build/mount"

@@ -3,8 +3,20 @@
 #include <QIODevice>
 #include <QString>
 
-// Isolated ZIP32 validation only. Does not extract or create any files.
-// The caller must supply a single already-open, seekable source. It is not a
-// substitute for safe staging, FAT alias checks or publication of extracted data.
-bool validateZipArchive(QIODevice &source, QString &error);
+// A sink receives only names validated by the same parser that reads and
+// checks each payload. It must stage outputs and discard them on any failure.
+class ZipSink {
+public:
+    virtual ~ZipSink() {}
+    virtual bool beginArchive(quint64 totalBytes, int entries, QString &error) = 0;
+    virtual bool begin(const QString &name, bool directory, QString &error) = 0;
+    virtual bool write(const char *data, int size, QString &error) = 0;
+    virtual bool end(QString &error) = 0;
+};
+// An already-open regular file is used for the entire operation. A null sink
+// only validates; a non-null sink receives payloads while CRC is checked.
+bool processZipArchive(QIODevice &source, QString &error, ZipSink *sink = nullptr);
+inline bool validateZipArchive(QIODevice &source, QString &error) {
+    return processZipArchive(source, error);
+}
 #endif

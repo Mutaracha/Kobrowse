@@ -109,6 +109,27 @@ class SettingsUiTest {
         require(!button->isDown(), "second finger clears pressed feedback");
         touch(w, QEvent::TouchCancel, point, 0);
     }
+    static void testExtractAndLogging(KobrowseWindow &w) {
+        const QString source = w.m_root + "/fixture-book.txt";
+        QFile file(source); require(file.open(QIODevice::WriteOnly) && file.write("fixture") == 7, "extract source fixture"); file.close();
+        const QString archive = w.m_root + "/fixture-book.zip";
+        QString error;
+        require(createZipArchive(w.m_root, archive, QStringList() << source, error), "create UI extract fixture");
+        QTreeWidgetItem item; item.setData(0, ROLE_PATH, archive); item.setData(0, ROLE_DIR, false);
+        w.onItem(&item);
+        require(QFileInfo(archive).exists(), "UI extraction preserves archive");
+        require(QFileInfo(w.m_root + QString::fromUtf8("/Распаковано-fixture-book/fixture-book.txt")).exists(),
+                "UI extraction publishes contents");
+        QFile log(QString::fromUtf8(KOBROWSE_LOG));
+        require(log.open(QIODevice::ReadOnly), "diagnostic log created");
+        const QByteArray before = log.readAll(); log.close();
+        require(before.contains("zip extract start:") && before.contains("zip extract complete:"), "extraction start and result logged");
+        require(saveConfig(QStringList() << "logging_enabled", QStringList() << "0"), "disable log fixture");
+        klog(QString::fromUtf8("not-logged-marker"));
+        require(log.open(QIODevice::ReadOnly) && log.readAll() == before, "disabled logging does not write");
+        log.close();
+        require(saveConfig(QStringList() << "logging_enabled", QStringList() << "1"), "restore log fixture");
+    }
     static void testBrightness(KobrowseWindow &w) {
         FakeBrightness fake; w.m_brightnessBackend = &fake;
         QPoint start = w.m_list->viewport()->mapTo(&w, QPoint(5, w.m_list->viewport()->height() / 2));
@@ -193,6 +214,7 @@ public:
             "no home or extra leading separator for multiple selections");
         w.m_clip.clear(); w.clearSelection();
         testBrightness(w);
+        testExtractAndLogging(w);
         w.showSettings(true); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings fit screen");
         const int font = row("list_pt"), family = row("list_font"), hold = row("long_tap_ms");

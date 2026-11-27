@@ -9,7 +9,7 @@
 #include <zlib.h>
 
 // ZIP32 bounds and record checks adapted from Kobalt's MIT-licensed
-// ZipResource (see res/KOBALT-LICENSE.txt). This validator never writes files.
+// ZipResource (see res/KOBALT-LICENSE.txt). The optional sink must stage output.
 namespace {
 const quint64 maxDirectory = 4 * 1024 * 1024;
 const quint64 maxFile = 256 * 1024 * 1024;
@@ -61,7 +61,7 @@ bool sameIdentity(const Identity &a, const Identity &b) {
         && a.modified.tv_sec == b.modified.tv_sec && a.modified.tv_nsec == b.modified.tv_nsec
         && a.changed.tv_sec == b.changed.tv_sec && a.changed.tv_nsec == b.changed.tv_nsec;
 }
-bool checkPayload(QIODevice &in, const Record &entry) {
+bool checkPayload(QIODevice &in, const Record &entry, ZipSink *sink, QString &error) {
     if (!in.seek(qint64(entry.start))) return false;
     quint64 remaining = entry.packed, emitted = 0;
     uLong crc = crc32(0L, Z_NULL, 0);
@@ -72,6 +72,7 @@ bool checkPayload(QIODevice &in, const Record &entry) {
             const int n = int(qMin<quint64>(remaining, block));
             if (in.read(input, n) != n) return false;
             crc = crc32(crc, reinterpret_cast<const Bytef *>(input), n);
+            if (sink && !sink->write(input, n, error)) return false;
             remaining -= n; emitted += n;
         }
     } else {
@@ -92,6 +93,7 @@ bool checkPayload(QIODevice &in, const Record &entry) {
             emitted += quint64(n);
             if (emitted > entry.size) { valid = false; break; }
             crc = crc32(crc, reinterpret_cast<const Bytef *>(output), uInt(n));
+            if (n && sink && !sink->write(output, n, error)) { valid = false; break; }
             if (code == Z_STREAM_END) ended = true;
             else if (code != Z_OK || (n == 0 && before == z.avail_in)) valid = false;
         }
@@ -103,7 +105,7 @@ bool checkPayload(QIODevice &in, const Record &entry) {
 }
 }
 
-bool validateZipArchive(QIODevice &source, QString &error) {
+bool processZipArchive(QIODevice &source, QString &error, ZipSink *sink) {
     error.clear();
     if (!source.isOpen() || !source.isReadable() || source.isSequential())
         return fail(error, "Архив недоступен для чтения");
@@ -189,8 +191,16 @@ bool validateZipArchive(QIODevice &source, QString &error) {
     std::sort(entries.begin(), entries.end(), [](const Record &a, const Record &b) { return a.local < b.local; });
     for (int i = 1; i < entries.size(); ++i)
         if (entries[i - 1].end > entries[i].local) return fail(error, "Перекрывающиеся записи ZIP");
-    for (int i = 0; i < entries.size(); ++i)
-        if (!checkPayload(source, entries[i])) return fail(error, "Повреждённые данные или CRC ZIP");
+    if (sink && !sink->beginArchive(total, entries.size(), error)) return false;
+    for (int i = 0; i < entries.size(); ++i) {
+        const Record &entry = entries[i];
+        if (sink && !sink->begin(QString::fromUtf8(entry.name), entry.directory, error)) return false;
+        if (!checkPayload(source, entry, sink, error)) {
+            if (error.isEmpty()) error = QString::fromUtf8("Повреждённые данные или CRC ZIP");
+            return false;
+        }
+        if (sink && !sink->end(error)) return false;
+    }
     if (!identity(source, after) || !sameIdentity(before, after)) return fail(error, "Архив изменился во время проверки");
     return true;
 }

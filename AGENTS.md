@@ -1,110 +1,104 @@
-# Работа над Kobrowse
+# Working on Kobrowse
 
-Прежде чем менять проект, прочитайте `README.md` и `doc/plan.md`. Этот файл
-адаптирует применимые принципы `Mutaracha/kobalt_ru/AGENTS.md` к текущему
-репозиторию: не переносите платформенные команды Kobalt без проверки. Если
-меняется сборка или CI, обновляйте инструкции и проверку пакета в том же изменении.
+Before changing the project, read `README.md` and `doc/plan.md`. This file
+adapts applicable principles from `Mutaracha/kobalt_ru/AGENTS.md` to this
+repository: do not transfer Kobalt's platform commands without verification.
+When changing the build or CI, update the instructions and package checks in
+the same change.
 
-## Область проекта и среда
+## Scope and environment
 
-- Цель — **только Kobo и Qt 5**: файловый менеджер как плагин Nickel.
-  KOReader и приложенные пользователем изображения — ориентиры
-  функциональности и интерфейса. Адаптируйте вид и управление для e-ink.
-- `src/kobrowse.cc` — текущая реализация; `res/nm_kobrowse` — интеграция с
-  NickelMenu; `doc/plan.md` — план развития.
-- `NickelHook` — Git-субмодуль из `pgaskin/NickelHook`, закреплённый на
-  ревизии родительского репозитория. Используйте
-  `git submodule update --init --recursive`; не редактируйте зависимость для
-  изменений проекта и не обновляйте её ревизию без обоснования и проверки.
-- Существующий путь сборки использует NickelTC (GCC 4.9, Qt 5.2.1, C++11).
-  Не вводите API или возможности языка, отсутствующие в этой среде, без
-  подтверждённого изменения SDK и проверки совместимости. Не собирайте Qt и
-  не чините его SDK внутри приложения. Kobalt использует подготовленные SDK;
-  возможный переход на его Kobo Qt 5 SDK и CMake остаётся задачей плана, а не
-  свойством текущей сборки.
-- Не предполагайте, что в среде Arena есть Docker, доступ к сокету контейнерного
-  движка, Qt или реальное устройство. Ограничения сети и инструменты зависят
-  от текущей среды; учитывайте их и сообщайте, что фактически проверено.
+- Target **Kobo and Qt 5 only**: a Nickel file-manager plugin. KOReader and
+  user-provided images are functional and visual references, not a request to
+  port an Android UI. Adapt appearance and controls for e-ink.
+- `src/kobrowse.cc` is the current implementation; `res/nm_kobrowse` provides
+  NickelMenu integration; `doc/plan.md` is the development plan.
+- `NickelHook` is a Git submodule of `pgaskin/NickelHook`, pinned by the parent
+  repository. Use `git submodule update --init --recursive`; do not edit the
+  dependency for project changes or update its revision without justification
+  and verification.
+- The existing build uses NickelTC (GCC 4.9, Qt 5.2.1, C++11). Do not use APIs
+  or language features absent from that environment without a confirmed SDK
+  change and compatibility verification. Do not build Qt or repair its SDK
+  inside the application. Kobalt uses prepared SDKs; migration to its Kobo Qt 5
+  SDK and CMake remains a planned task, not a property of the current build.
+- Do not assume Docker, a container socket, Qt, or a real device exists in the
+  Arena environment. Network and tools vary; report what was actually tested.
 
-## Сборка, проверки и CI
+## Build, checks, and CI
 
-- Для быстрых проверок без Docker (нужны Python 3 и `make`):
-  `python3 -m unittest discover -s tests -v`. Эти тесты проверяют упаковку на
-  фиктивной библиотеке и **не компилируют** приложение. При наличии Qt 5 для
-  системных тестов запустите `bash tests/run-file-policy-tests.sh`; он
-  компилирует и проверяет реальные функции списка и правил путей. Запустите
-  также `bash tests/run-pagination-ui-tests.sh` для невидимой проверки целых
-  строк страниц (Qt 5 Widgets, платформа offscreen), `bash tests/run-settings-ui-tests.sh`
-  для реального окна настроек в изолированном временном дереве,
-  `bash tests/run-brightness-tests.sh` для жеста и подставного API подсветки и
-  `bash tests/run-zip-tests.sh` для проверки реального ZIP-писателя и
-  изолированного валидатора ZIP стандартным Python `zipfile` (нужны Qt 5 и zlib).
-  Валидатор не извлекает файлы; распаковка остаётся отключённой. Для проверки защит на FAT
-  запустите `bash tests/run-fat-policy-tests.sh`: нужны dosfstools, Qt 5,
-  `pkg-config`, `sudo` без пароля и возможность монтировать временный loop-образ.
-  Скрипт использует только созданный им изолированный образ, не устройства.
-- Локальная кросс-сборка при наличии Docker и SDK:
-  `bash scripts/build-kobo.sh`. Субмодуль должен быть инициализирован; скрипт
-  удаляет только старые генерируемые выходные файлы, запускает `make -B all`,
-  затем `make package` в образе NickelTC, закреплённом по digest в скрипте,
-  проверяет состав и совпадение библиотеки с пакетом и создаёт
-  `build/build-info.json` с Git-состоянием, SDK и SHA-256. CI требует чистые
-  исходники и сохраняет метаданные рядом с пакетом. Самостоятельный `make package`
-  не обеспечивает этих проверок. Не собирать Qt при сборке приложения.
-  Переопределения `CONTAINER_ENGINE` и
-  `KOBROWSE_SDK_IMAGE` предназначены для осознанной проверки альтернативной среды.
-- `libkobrowse.so` — генерируемый файл, не храните его в репозитории.
-  Никогда не выдавайте старый бинарный файл за результат новой сборки.
-  Не запускайте `make clean` вслепую: штатные правила NickelHook могут
-  удалить `KoboRoot.tgz` в рабочей папке.
-- GitHub CI — основной способ проверки изменений, поскольку локальная среда
-  может не содержать Qt, SDK или Docker. Пользователь заранее разрешил запуск
-  тестов в CI; не запрашивайте отдельного подтверждения в следующий раз.
-  Для запуска CI разрешены необходимые stage, commit и push только в текущую
-  рабочую ветку. Это не разрешение на публикацию релиза, слияние или push в
-  другую ветку. Дождитесь результата и сообщите, что действительно проверено.
-- `.github/workflows/kobo-test.yml` получает субмодуль, запускает тесты, собирает и
-  проверяет архив и сохраняет пакет и метаданные в артефакте `kobrowse-kobo-qt5-test`. Пользователю не
-  нужны Docker и NickelTC на компьютере для получения артефакта GitHub Actions;
-  на GitHub runner используется Docker. Не обещайте успешную сборку до проверки
-  результата конкретного запуска. Артефакт — тестовый, не опубликованный релиз.
-- Тестовый `build/KoboRoot.tgz` должен содержать библиотеку, пункт меню,
-  `.adds/kobrowse/uninstall` (его удаление запускает деинсталляцию) и
-  `.adds/kobrowse/KOBALT-LICENSE.txt` — лицензию перенесённого кода Kobalt;
-  `scripts/check-package.py` проверяет состав, владельца, права и тип ELF.
-  Не упаковывайте конфигурацию пользователя или другие приложения.
-- Проверка CI и автоматические тесты не подтверждают работу на физическом
-  Kobo. Отдельно проверяйте прошивку, установку, интерфейс, USB и сон на
-  устройстве; перед испытаниями рекомендуйте резервную копию.
+- For quick checks without Docker (Python 3 and `make` required), run
+  `python3 -m unittest discover -s tests -v`. These test packaging with a fake
+  library and **do not compile** the application. With Qt 5 available, run
+  `bash tests/run-file-policy-tests.sh` for real listing and path-policy code,
+  `bash tests/run-pagination-ui-tests.sh` for offscreen whole-row pagination,
+  `bash tests/run-settings-ui-tests.sh` for the actual settings window in an
+  isolated temporary tree, `bash tests/run-brightness-tests.sh` for gestures and
+  the mock brightness API, and `bash tests/run-zip-tests.sh` for ZIP creation
+  and validation/extraction checks using Python `zipfile` (Qt 5 and zlib
+  required). For FAT protection checks, run `bash tests/run-fat-policy-tests.sh`;
+  this requires dosfstools, Qt 5, `pkg-config`, passwordless `sudo`, and the
+  ability to mount a temporary loop image. The script only uses its own isolated
+  image, never devices.
+- For local cross-compilation when Docker and the SDK are available, run
+  `bash scripts/build-kobo.sh`. Initialize the submodule first. The script
+  removes only previous generated outputs, runs `make -B all` and `make package`
+  in the NickelTC image pinned by digest in the script, checks archive contents
+  and the packaged library against the build output, and creates
+  `build/build-info.json` with Git state, SDK and SHA-256. CI requires clean
+  sources and saves metadata alongside the package. Running `make package`
+  alone does not provide these checks. Do not build Qt. `CONTAINER_ENGINE` and
+  `KOBROWSE_SDK_IMAGE` are for deliberate alternative-environment testing.
+- `libkobrowse.so` is generated; do not keep it in the repository. Never present
+  an old binary as a new build. Do not blindly run `make clean`: NickelHook's
+  standard rules can delete `KoboRoot.tgz` in the working directory.
+- GitHub CI is the primary way to verify changes because the local environment
+  may lack Qt, SDK, or Docker. The user has preauthorized CI tests; do not ask
+  again. Necessary stage, commit, and push operations are authorized **only on
+  the current working branch** to run CI. This is not permission to publish a
+  release, merge, or push to another branch. Wait for results and report what
+  was actually checked.
+- `.github/workflows/kobo-test.yml` fetches the submodule, runs tests, builds and
+  verifies the package, and stores it with metadata in the
+  `kobrowse-kobo-qt5-test` artifact. The user does not need Docker or NickelTC
+  on their computer; the GitHub runner uses Docker. Do not promise a successful
+  build before verifying the specific run. The artifact is a test build, not a
+  published release.
+- The test `build/KoboRoot.tgz` must contain the library, menu entry,
+  `.adds/kobrowse/uninstall` (whose removal triggers uninstallation), and
+  `.adds/kobrowse/KOBALT-LICENSE.txt` for adapted Kobalt code;
+  `scripts/check-package.py` checks contents, ownership, modes, and ELF type.
+  Do not package user configuration or other applications.
+- CI and automated tests do not prove operation on a physical Kobo. Separately
+  verify firmware, installation, interface, USB, and sleep on the device;
+  recommend a backup before testing.
 
-## Безопасность и данные
+## Data safety
 
-- Сохраняйте пользовательские файлы, настройки и другие модификации. Не
-  перезаписывайте пользовательский `KoboRoot.tgz` или `kobrowse.ini` без
-  разрешения; `build/KoboRoot.tgz` — перезаписываемый результат сборки.
-  Не считайте `/mnt/onboard` защищённой песочницей: ссылки, архивы и операции
-  с файлами требуют отдельной проверки. Тесты файловых операций должны
-  использовать изолированные временные каталоги, а не данные пользователя.
-- При изменении форматов сохранённых данных обеспечивайте обратную
-  совместимость и тесты миграции; не удаляйте настройки и пользовательские
-  данные ради очистки кэша или обновления версии. Операции с файлами должны
-  сообщать об ошибках и не приводить к незаметной потере данных.
-- Учитывайте, что плагин работает внутри Nickel и может оставаться активным
-  во время USB-сессии: не удерживайте открытые файлы накопителя без нужды,
-  не расходуйте избыточные ресурсы и осторожно используйте внутренние API Nickel.
+- Preserve user files, settings, and other modifications. Do not overwrite a
+  user's `KoboRoot.tgz` or `kobrowse.ini` without permission;
+  `build/KoboRoot.tgz` is an overwriteable build output. Do not treat
+  `/mnt/onboard` as a protected sandbox: symbolic links, archives, and file
+  operations require separate checks. File-operation tests must use isolated
+  temporary directories, never user data.
+- When changing persisted formats, ensure backward compatibility and migration
+  tests. Do not remove settings or user data to clear caches or update a
+  version. File operations must report errors and not silently lose data.
+- The plugin runs inside Nickel and may remain active during a USB session:
+  do not hold onboard storage files open unnecessarily, avoid excess resource
+  use, and treat private Nickel APIs cautiously.
 
-## Порядок работы
+## Workflow
 
-- Сначала оценивайте дублирование сборки, ненужные пересборки, обходы SDK и
-  неясное владение кодом; предлагайте простое решение, а не переносите целиком
-  инфраструктуру Kobalt. Не используйте другие рабочие копии как зависимость.
-- Держите документацию в `doc/`, кроме корневых `README.md` и `AGENTS.md`.
-  Уважайте пользовательские правки, не удаляйте чужие данные и не запускайте
-  видимые UI-тесты без разрешения. После своей работы останавливайте свои
-  вспомогательные процессы и убирайте временные каталоги и контейнеры, не
-  затрагивая чужие процессы, SDK и полезные результаты.
-- Вне указанного выше разрешения для CI не выполняйте stage, commit, push или
-  публикацию без явного разрешения пользователя. Используйте только текущую ветку. Не добавляйте agent
-  coauthor; предупреждайте заранее, если подписанная операция может вызвать
-  запрос 1Password. В сообщениях коммитов пишите `alpha` и `beta` строчными
-  буквами; `RC` допустимо оставлять прописными.
+- First assess duplicated builds, unnecessary rebuilds, SDK workarounds, and
+  unclear ownership; prefer a simple solution rather than copying Kobalt's
+  entire infrastructure. Do not depend on other working copies.
+- Keep documentation in `doc/` except the root `README.md` and `AGENTS.md`.
+  Respect user edits, do not delete others' data, and do not run visible UI
+  tests without permission. After work, stop your auxiliary processes and clean
+  up your temporary directories and containers without disturbing others'
+  processes, SDKs, or useful results.
+- Outside the CI authorization above, do not stage, commit, push, or publish
+  without explicit user permission. Use the current branch only. Do not add an
+  agent coauthor; warn in advance if a signed operation might prompt 1Password.
+  In commit messages, write `alpha` and `beta` in lowercase; `RC` may stay uppercase.

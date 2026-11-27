@@ -6,9 +6,8 @@
 #include <QString>
 #include <QStringList>
 
-// Preliminary policy only: this is not a ZIP parser or extractor. A future
-// extractor must also validate central/local headers, types, CRC, disk space,
-// existing FAT aliases and publication; until then extraction stays disabled.
+// Name policy only. The ZIP reader and staged extractor separately check
+// headers, types, CRC, available space, FAT collisions and publication.
 class ZipPathManifest {
 public:
     bool add(const QByteArray &raw, bool utf8Flag, bool directory, QString &error) {

@@ -62,6 +62,7 @@
 #include "file_policy.h"
 #include "file_mutations.h"
 #include "zip_writer.h"
+#include "zip_extract.h"
 #include "pagination.h"
 #include "home_folder.h"
 #include "action_menu.h"
@@ -2066,7 +2067,7 @@ public:
         qApp->installEventFilter(this);
     }
 
-    ~KobrowseWindow() { cancelBrightness(); qApp->removeEventFilter(this); }
+    ~KobrowseWindow() { klog(u8("window closed")); cancelBrightness(); qApp->removeEventFilter(this); }
 
 protected:
     // Касания обрабатываем сами: TouchBegin нужно принять, иначе TouchEnd не придёт.
@@ -2250,7 +2251,9 @@ protected:
             if (m_brightnessConsumed) {
                 if (m_brightnessTracking && !pts.isEmpty()) updateBrightness(p);
                 if (m_brightnessTracking) {
-                    if (!m_brightnessBackend->finish(true)) showMessage(u8("Не удалось завершить изменение яркости"));
+                    const bool saved = m_brightnessBackend->finish(true);
+                    klog(saved ? u8("brightness gesture completed") : u8("brightness gesture finish failed"));
+                    if (!saved) showMessage(u8("Не удалось завершить изменение яркости"));
                     m_brightnessTracking = false;
                 }
                 m_brightnessGesture.cancel(); m_brightnessConsumed = false;
@@ -2332,7 +2335,7 @@ private:
         if (m_brightnessTracking) {
             const bool restored = m_brightnessBackend->finish(false);
             m_brightnessTracking = false;
-            if (!restored) klog(u8("brightness: could not restore cancelled gesture"));
+            klog(restored ? u8("brightness gesture cancelled") : u8("brightness: could not restore cancelled gesture"));
         }
         m_brightnessGesture.cancel();
     }
@@ -2592,8 +2595,12 @@ private:
         krename_open(QFileInfo(source).fileName(), [self, source](const QString &name) -> QString {
             if (!self) return u8("Окно закрыто");
             QString error;
-            if (!renameLocalEntry(self->m_root, source, name, error, ALLOW_ADDS)) { self->clearSelection(); return error; }
+            if (!renameLocalEntry(self->m_root, source, name, error, ALLOW_ADDS)) {
+                klog(u8("rename failed: ") + source + u8("; ") + error);
+                self->clearSelection(); return error;
+            }
             const QString dest = QFileInfo(source).absolutePath() + u8("/") + name;
+            klog(u8("rename complete: ") + source + u8(" -> ") + dest);
             for (int i = 0; i < self->m_clip.size(); ++i)
                 if (pathWithin(self->m_clip[i], source)) self->m_clip[i] = dest + self->m_clip[i].mid(source.size());
             self->m_marked.clear(); self->m_selectionOrder.clear(); self->load();
@@ -2652,7 +2659,8 @@ private:
         }
         ::sync();
         if (m_clipCut) m_clip = remaining;
-        klog(u8("paste %1 item(s) to %2").arg(done).arg(m_path));
+        klog(u8("paste %1: completed=%2 failed=%3 destination=%4 error=%5")
+             .arg(m_clipCut ? u8("move") : u8("copy")).arg(done).arg(remaining.size()).arg(m_path).arg(err));
         load();
         if (!err.isEmpty()) { clearSelection(); showMessage(err); }
     }
@@ -2665,7 +2673,11 @@ private:
         if (sources.isEmpty()) return;
         const QString dest = archiveDestination(m_path, QFileInfo(sources.first()).fileName());
         QString error;
-        if (!createZipArchive(m_root, dest, sources, error, ALLOW_ADDS)) { clearSelection(); showMessage(error); return; }
+        klog(u8("zip create start: count=%1 destination=%2").arg(sources.size()).arg(dest));
+        if (!createZipArchive(m_root, dest, sources, error, ALLOW_ADDS)) {
+            klog(u8("zip create failed: ") + error); clearSelection(); showMessage(error); return;
+        }
+        klog(u8("zip create complete: ") + dest);
         ::sync();
         m_marked.clear(); m_selectionOrder.clear();
         load();
@@ -2770,6 +2782,7 @@ private:
             m_selectionOrder.removeAll(path);
         }
         ::sync();
+        klog(u8("delete action=%1 total=%2 failed=%3").arg(action).arg(paths.size()).arg(failed.size()));
         if (action == 1) clearSelection();
         load();
         showMessage(failed.isEmpty() ? u8("Удалено: %1").arg(paths.size())
@@ -2793,6 +2806,7 @@ private:
             else m_clip.removeAll(src);
         }
         ::sync();
+        klog(u8("trash move total=%1 failed=%2").arg(m_marked.size()).arg(remaining.size()));
         clearSelection();
         load();
         if (!remaining.isEmpty()) showMessage(u8("Не перенесено в корзину: %1").arg(remaining.size()));
@@ -2936,10 +2950,18 @@ private:
             load();
             return;
         }
-        // Until a safe extractor is implemented, never hand archives to an
-        // external unzip program or offer to move them to the trash.
+        // The internal reader stages and verifies the entire archive; the ZIP
+        // itself is always kept, whether extraction succeeds or fails.
         if (path.endsWith(u8(".zip"), Qt::CaseInsensitive)) {
-            showMessage(u8("Распаковка ZIP временно недоступна: требуется защита содержимого"));
+            QString output, error;
+            klog(u8("zip extract start: ") + path);
+            if (!extractZipArchive(m_root, path, output, error, ALLOW_ADDS)) {
+                klog(u8("zip extract failed: ") + error);
+                load(); showMessage(u8("Не удалось распаковать: ") + error);
+            } else {
+                ::sync(); klog(u8("zip extract complete: ") + output);
+                load(); showMessage(u8("Распаковано: ") + QDir(m_path).relativeFilePath(output));
+            }
             return;
         }
         // Файл — открыть читалкой, выбранной в Kobalt («Автоматически открывать книги в Kobalt»)
@@ -3562,6 +3584,7 @@ static QTimer              *g_poll = nullptr;  // страховка: inotify н
 static QTimer *g_lifecycleClose = nullptr;
 static QPointer<QObject> g_plugManager;
 static void closeForLifecycle() {
+    if (g_search || g_win) klog(u8("USB lifecycle: closing windows"));
     if (g_search) g_search->close();
     if (g_win) g_win->close();
 }
