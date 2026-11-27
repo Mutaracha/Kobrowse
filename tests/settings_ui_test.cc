@@ -225,7 +225,21 @@ public:
         require(build && build->text().contains("local") && build->font().pixelSize() == clock->font().pixelSize(), "build identity in status row");
         require(clock->font().family() == batteryLabel->font().family() && build->font().family() == clock->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
-        require(w.m_actions->font().pixelSize() == ptToPx(8.5), "context menu uses 8.5 points");
+        require(w.m_actions->font().pixelSize() == w.m_list->font().pixelSize()
+                && w.m_actions->font().family() == w.m_list->font().family(), "context menu uses list font and size");
+        const QStringList iconNames = QStringList() << QString::fromUtf8("Домашняя папка")
+            << QString::fromUtf8("Открыть корзину") << QString::fromUtf8("Поиск") << QString::fromUtf8("Настройки");
+        for (const QString &name : iconNames) {
+            QPushButton *control = nullptr;
+            for (QPushButton *candidate : w.m_toolbar->findChildren<QPushButton *>())
+                if (candidate->accessibleName() == name) { control = candidate; break; }
+            require(control, "toolbar icon exists");
+            QImage before(control->size(), QImage::Format_RGB32); before.fill(Qt::white); control->render(&before);
+            control->setDown(true);
+            QImage pressed(control->size(), QImage::Format_RGB32); pressed.fill(Qt::white); control->render(&pressed);
+            control->setDown(false);
+            require(before == pressed, "toolbar icon does not invert background on press");
+        }
         require(sleepRecoveryAllowed(true, false, false, false, false), "restore only when native views clear");
         require(!sleepRecoveryAllowed(false, false, false, false, false)
             && !sleepRecoveryAllowed(true, true, false, false, false)
@@ -345,6 +359,8 @@ public:
                 }
                 QLabel *label = w.m_setLabels[i];
                 require(label->heightForWidth(label->width()) <= label->height(), "slider caption is fully visible");
+                require(qAbs(label->width() * 3 - w.m_settingRows[i]->width()) < 30, "slider caption occupies a third of row");
+                require(label->text().contains(": ") && !label->text().contains(QString::fromUtf8("Сейчас")), "slider caption uses colon");
             }
         }
         w.setSettingsTab(0); w.resize(768, 1024); QApplication::processEvents();
@@ -388,10 +404,20 @@ public:
         require(w.m_fontPicker->topLevelItemCount() == w.m_fonts.size(), "font picker has no cancel item");
         require(w.m_pickerDone->mapTo(&w, QPoint()).x() < w.m_pickerCancel->mapTo(&w, QPoint()).x(),
                 "picker cancel is on the right");
+        require(w.m_fontPicker->topLevelItem(0)->text(0) == "Kobo", "empty font labelled Kobo");
+        if (w.m_fonts.size() > 1) {
+            require(w.m_fontPicker->topLevelItem(1)->font(0).family() == w.m_fonts.at(1), "font choices use own typeface");
+            w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(1)); w.m_pickerDone->click();
+            require(w.m_actions->font().family() == w.m_list->font().family()
+                    && w.m_actions->font().pixelSize() == w.m_list->font().pixelSize(), "font selection applies to menu");
+            choice->click();
+        }
         require(w.m_setLabels[font]->text().contains(QString::fromUtf8(" пт")), "font size includes points");
         w.m_fontPicker->setCurrentItem(w.m_fontPicker->topLevelItem(0)); w.m_pickerDone->click();
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
+        require(w.m_actions->font().pixelSize() == LIST_PX && w.m_actions->font().family() == w.m_list->font().family(),
+                "context menu updates with list size");
         reset->click(); no->click(); require(LIST_PX > beforeFont, "reset cancellation preserves setting");
         reset->click(); yes->click(); require(LIST_PX == ptToPx(8.5), "font reset applies immediately");
         require(QFileInfo(homeFile).exists(), "font reset preserves home");
