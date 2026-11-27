@@ -11,7 +11,7 @@ EXPECTED = {
 }
 
 
-def check(path):
+def check(path, plugin_path=None):
     with tarfile.open(path, 'r:gz') as archive:
         members = archive.getmembers()
         names = [m.name.removeprefix('./') for m in members]
@@ -27,6 +27,10 @@ def check(path):
                 if (len(data) < 20 or data[:6] != b'\x7fELF\x01\x01'
                         or data[16:20] != b'\x03\x00\x28\x00'):
                     raise ValueError('plugin is not an ARM ELF32 shared object')
+                if plugin_path is not None:
+                    with open(plugin_path, 'rb') as plugin:
+                        if data != plugin.read():
+                            raise ValueError('packaged plugin differs from freshly built plugin')
             elif name.endswith('/nm/kobrowse'):
                 if b'touch /tmp/kobrowse.open' not in data:
                     raise ValueError('missing NickelMenu entry')
@@ -39,9 +43,9 @@ def check(path):
 
 if __name__ == '__main__':
     try:
-        if len(sys.argv) != 2:
-            raise ValueError('usage: check-package.py PACKAGE')
-        check(sys.argv[1])
+        if len(sys.argv) not in (2, 3):
+            raise ValueError('usage: check-package.py PACKAGE [BUILT_PLUGIN]')
+        check(sys.argv[1], sys.argv[2] if len(sys.argv) == 3 else None)
     except (OSError, tarfile.TarError, ValueError) as exc:
         print('Package check failed:', exc, file=sys.stderr)
         sys.exit(1)

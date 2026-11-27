@@ -53,11 +53,13 @@ jobs:
       - name: Test package checks
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify Qt 5 test package
+        env:
+          KOBROWSE_REQUIRE_CLEAN: '1'
         run: bash scripts/build-kobo.sh
-      - name: Inspect currently tested SDK image
-        run: echo "::notice::SDK image $(docker image inspect ghcr.io/pgaskin/nickeltc:1 --format '{{json .RepoDigests}}')"
       - uses: actions/upload-artifact@v7
         with:
           name: kobrowse-kobo-qt5-test
-          path: build/KoboRoot.tgz
+          path: |
+            build/KoboRoot.tgz
+            build/build-info.json
           if-no-files-found: error

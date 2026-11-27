@@ -23,7 +23,8 @@ NickelMenu и предназначен для работы с файлами в 
 1. Установите [NickelMenu](https://github.com/pgaskin/NickelMenu) на Kobo.
 2. На странице успешного запуска [GitHub Actions](https://github.com/Mutaracha/Kobrowse/actions/workflows/kobo-test.yml)
    скачайте артефакт `kobrowse-kobo-qt5-test` и извлеките из него архив
-   `KoboRoot.tgz`.
+   `KoboRoot.tgz`. Рядом находится `build-info.json`: ревизии исходников и SDK,
+   состояние рабочего дерева и SHA-256 пакета. Этот файл не устанавливается на Kobo.
 3. Подключите ридер к компьютеру. Если в папке `.kobo` уже есть ожидающий
    установки `KoboRoot.tgz`, сначала разберитесь с ним и сохраните его копию.
 4. Скопируйте `KoboRoot.tgz` в папку `.kobo` на ридере.

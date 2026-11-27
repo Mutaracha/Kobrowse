@@ -28,7 +28,10 @@ class PackageTest(unittest.TestCase):
             (root / 'KoboRoot.tgz').write_bytes(b'existing update')
             subprocess.run(['make', 'package'], cwd=root, check=True, stdout=subprocess.PIPE)
             self.assertEqual((root / 'KoboRoot.tgz').read_bytes(), b'existing update')
-            checker.check(root / 'build/KoboRoot.tgz')
+            checker.check(root / 'build/KoboRoot.tgz', root / 'libkobrowse.so')
+            (root / 'libkobrowse.so').write_bytes(ARM_SO + b'changed')
+            with self.assertRaisesRegex(ValueError, 'differs'):
+                checker.check(root / 'build/KoboRoot.tgz', root / 'libkobrowse.so')
 
     def test_runtime_names_match_package(self):
         source = (ROOT / 'src/kobrowse.cc').read_text(encoding='utf-8')
