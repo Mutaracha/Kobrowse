@@ -15,7 +15,7 @@ enum SettingGroup {
 inline SettingGroup settingGroup(const QString &key) {
     struct Mapping { const char *key; SettingGroup group; };
     static const Mapping map[] = {
-        {"show_hidden", GroupFiles}, {"trash_enabled", GroupTrash},
+        {"show_hidden", GroupFiles}, {"allow_adds_edit", GroupFiles}, {"trash_enabled", GroupTrash},
         {"long_tap_ms", GroupBehavior}, {"idle_min", GroupBehavior},
         {"open_books", GroupBooks}, {"logging_enabled", GroupLogging},
         {"scale_pct", GroupAppearance}, {"btn_height_pt", GroupAppearance},
@@ -26,7 +26,6 @@ inline SettingGroup settingGroup(const QString &key) {
         {"btn_pt", GroupButtonFont}, {"btn_font", GroupButtonFont},
         {"info_pt", GroupInfoFont}, {"search_list_pt", GroupSearchFont},
         {"search_list_font", GroupSearchFont},
-        {"opds_key_pt", GroupKeyboard}, {"opds_func_pt", GroupKeyboard},
         {"key_font_pt", GroupKeyboard}, {"func_pt", GroupKeyboard}
     };
     for (const Mapping &m : map) if (key == QLatin1String(m.key)) return m.group;

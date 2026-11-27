@@ -76,40 +76,45 @@ inline bool safeLocalPath(const QString &root, const QString &path, bool allowMi
     return true;
 }
 
-// These directories remain visible, but operations must not modify their contents.
-// Compare both the spelling and the filesystem identity of the root component:
-// on FAT, a differently cased or short 8.3 name may refer to the same entry.
-// Callers must still reject symlinks and concurrent path replacement separately.
-inline bool protectedLocalPath(const QString &root, const QString &path) {
+// Compare the first component by spelling and by filesystem identity; FAT may
+// expose a short alias. The protected root itself is never made editable.
+inline bool rootComponentMatches(const QString &base, const QString &first, const char *name) {
+    if (first.compare(QLatin1String(name), Qt::CaseInsensitive) == 0) return true;
+    struct stat candidate, guarded;
+    return ::lstat(QFile::encodeName(base + QLatin1Char('/') + first).constData(), &candidate) == 0
+        && ::lstat(QFile::encodeName(base + QLatin1Char('/') + QLatin1String(name)).constData(), &guarded) == 0
+        && candidate.st_dev == guarded.st_dev && candidate.st_ino == guarded.st_ino;
+}
+inline bool protectedLocalPath(const QString &root, const QString &path, bool allowAdds = false) {
     const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
     const QString target = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
     if (target == base) return true;
     if (!pathWithin(target, base)) return false;
-    const QString first = target.mid(base.size() + 1).section(QLatin1Char('/'), 0, 0);
-    const char *const protectedNames[] = { ".kobo", ".adds", ".kobrowse_trash" };
-    for (const char *name : protectedNames)
-        if (first.compare(QLatin1String(name), Qt::CaseInsensitive) == 0) return true;
-
-    struct stat candidate;
-    if (::lstat(QFile::encodeName(base + QLatin1Char('/') + first).constData(), &candidate) != 0)
-        return false;
-    for (const char *name : protectedNames) {
-        struct stat guarded;
-        const QByteArray guardedPath = QFile::encodeName(base + QLatin1Char('/') + QLatin1String(name));
-        if (::lstat(guardedPath.constData(), &guarded) == 0
-            && candidate.st_dev == guarded.st_dev && candidate.st_ino == guarded.st_ino)
-            return true;
-    }
+    const QString relative = target.mid(base.size() + 1);
+    const QString first = relative.section(QLatin1Char('/'), 0, 0);
+    if (rootComponentMatches(base, first, ".kobo") || rootComponentMatches(base, first, ".kobrowse_trash")) return true;
+    if (rootComponentMatches(base, first, ".adds")) return !(allowAdds && relative.contains(QLatin1Char('/')));
     return false;
+}
+// The root .adds folder may be used as a destination when enabled, but may
+// not itself be renamed, moved, deleted, or selected as an operation source.
+inline bool writableLocalDirectory(const QString &root, const QString &dir, bool allowAdds) {
+    const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
+    const QString target = QDir::cleanPath(QFileInfo(dir).absoluteFilePath());
+    if (target == base) return true;
+    if (!pathWithin(target, base)) return false;
+    const QString rel = target.mid(base.size() + 1);
+    if (allowAdds && !rel.contains(QLatin1Char('/')) && rootComponentMatches(base, rel, ".adds")) return true;
+    return !protectedLocalPath(base, target, allowAdds);
 }
 
 // Trash contents remain selectable for deletion; the trash directory itself
 // and other protected entries can only be browsed, not selected for mutation.
-inline bool readOnlyLocalEntry(const QString &root, const QString &trash, const QString &path) {
+inline bool readOnlyLocalEntry(const QString &root, const QString &trash, const QString &path, bool allowAdds = false) {
     const QString item = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
     const QString bin = QDir::cleanPath(QFileInfo(trash).absoluteFilePath());
     const bool insideTrash = item != bin && pathWithin(item, bin);
-    return protectedLocalPath(root, item) && !insideTrash;
+    return protectedLocalPath(root, item, allowAdds) && !insideTrash;
 }
 
 // Preflight copies before creating anything; never follow links, including nested ones.

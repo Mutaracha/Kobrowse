@@ -44,13 +44,13 @@ void setDate(Entry &e, const QDateTime &dt) {
 
 class Writer {
 public:
-    Writer(const QString &root, QFile &out, QString &error) : root(root), out(out), error(error) {}
+    Writer(const QString &root, QFile &out, QString &error, bool allowAdds) : root(root), out(out), error(error), allowAdds(allowAdds) {}
     bool add(const QString &path, const QString &name) {
         if (!safeLocalPath(root, path)) return fail("Недоступный путь или ссылка");
         QFileInfo info(path);
         if (!info.isDir() && !info.isFile()) return fail("Неподдерживаемый тип файла");
         if (info.isFile() && info.size() >= ZIP_LIMIT) return fail("Файл превышает предел ZIP32");
-        if (protectedLocalPath(root, path)) return fail("Служебные данные нельзя архивировать");
+        if (protectedLocalPath(root, path, allowAdds)) return fail("Служебные данные нельзя архивировать");
         if (entries.size() >= 65535 || out.pos() >= ZIP_LIMIT) return fail("Архив превышает предел ZIP32");
         Entry e = {};
         e.directory = info.isDir();
@@ -122,17 +122,18 @@ private:
         e.crc = quint32(crc); e.size = quint32(inputSize); e.compressed = quint32(outputSize);
         return true;
     }
-    QString root; QFile &out; QString &error; QVector<Entry> entries;
+    QString root; QFile &out; QString &error; bool allowAdds; QVector<Entry> entries;
 };
 } // namespace
 
 bool createZipArchive(const QString &root, const QString &destination,
-                      const QStringList &sources, QString &error) {
+                      const QStringList &sources, QString &error, bool allowAdds) {
     error.clear();
     const QFileInfo target(destination);
     const QString dir = target.absolutePath();
     if (sources.isEmpty() || !safeLocalPath(root, dir)
-        || (protectedLocalPath(root, dir) && dir != root)
+        || !writableLocalDirectory(root, dir, allowAdds)
+        || protectedLocalPath(root, destination, allowAdds)
         || !safeLocalPath(root, destination, true) || target.exists() || target.isSymLink()) {
         error = QString::fromUtf8("Недопустимое место или имя архива"); return false;
     }
@@ -140,14 +141,14 @@ bool createZipArchive(const QString &root, const QString &destination,
     for (const QString &src : sources) {
         const QFileInfo info(src);
         if (info.absolutePath() != dir || names.contains(info.fileName())
-            || protectedLocalPath(root, src) || !safeCopyTree(root, src)) {
+            || protectedLocalPath(root, src, allowAdds) || !safeCopyTree(root, src)) {
             error = QString::fromUtf8("Недоступный, защищённый путь или ссылка"); return false;
         }
         names.insert(info.fileName());
     }
     QTemporaryFile temporary(dir + QLatin1String("/.kobrowse_zip_XXXXXX"));
     if (!temporary.open()) { error = QString::fromUtf8("Не удалось создать временный архив"); return false; }
-    Writer writer(root, temporary, error);
+    Writer writer(root, temporary, error, allowAdds);
     for (const QString &src : sources)
         if (!writer.add(src, QFileInfo(src).fileName())) return false;
     if (!writer.finish()) return false;
