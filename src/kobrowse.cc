@@ -368,7 +368,9 @@ public:
             folder.lineTo(r.right(), r.bottom() - sz * .1);
             folder.lineTo(r.left(), r.bottom() - sz * .1);
             folder.closeSubpath();
+            p->setBrush(p->pen().color());
             p->drawPath(folder);
+            p->setBrush(Qt::NoBrush);
         } else {
             const QRectF box = r.adjusted(sz * .13, sz * .07, -sz * .13, -sz * .07);
             p->drawRect(box);
@@ -575,8 +577,12 @@ public:
     ButtonFace(Icon ic, const QString &t, QWidget *parent) : QWidget(parent), m_icon(ic), m_text(t) {
         setAttribute(Qt::WA_TransparentForMouseEvents);
     }
-    void setFace(Icon ic, const QString &t) { m_icon = ic; m_text = t; update(); }
+    void setFace(Icon ic, const QString &t) { m_icon = ic; m_text = t; updateGeometry(); update(); }
     const QString &text() const { return m_text; }
+    QSize sizeHint() const override {
+        const QFontMetrics fm(font());
+        return QSize(fm.width(m_text) + 2 * BTN_MARGIN + 4, fm.lineSpacing() + 8);
+    }
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
@@ -1804,12 +1810,17 @@ public:
         lay->setSpacing(qMax(4, GAP / 2));
 
         m_deviceStatus = new DeviceStatusBar(this);
-        QFont statusFont = sansFont();
+        QFont statusFont(u8("Sans Serif")); statusFont.setStyleHint(QFont::SansSerif);
         const QStringList statusFamilies = QFontDatabase().families();
-        for (const QString &family : statusFamilies)
-            if (family.compare(u8("Avenir Next"), Qt::CaseInsensitive) == 0) { statusFont = QFont(family); break; }
+        const char *statusPreferred[] = { "Avenir Next", "Avenir", "Rakuten Sans UI App", "Kobo Nickel" };
+        bool statusFound = false;
+        for (const char *name : statusPreferred) {
+            for (const QString &family : statusFamilies)
+                if (family.compare(u8(name), Qt::CaseInsensitive) == 0) { statusFont = QFont(family); statusFound = true; break; }
+            if (statusFound) break;
+        }
         statusFont.setPixelSize(qMax(12, qRound(26 * SCREEN_DPI / 300.0)));
-        m_deviceStatus->setFont(statusFont);
+        m_deviceStatus->setStatusFont(statusFont);
         m_deviceStatus->setScale(SCREEN_DPI / 300.0);
         lay->addWidget(m_deviceStatus);
 
@@ -2003,12 +2014,12 @@ public:
         m_prev->setFixedSize(footerHeight, footerHeight); m_next->setFixedSize(footerHeight, footerHeight);
         footer->addWidget(m_prev); footer->addWidget(m_next);
         m_pageLabel = new QLabel(m_nav); m_pageLabel->setFont(fMsg);
+        m_pageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         footer->addWidget(m_pageLabel);
         m_footerNotice = new FooterNotice(m_nav); m_footerNotice->setFont(fMsg);
         m_footerNotice->setFixedHeight(footerHeight);
         footer->addWidget(m_footerNotice, 1);
-        m_countLabel = new QPushButton(m_nav); m_countLabel->setFont(fMsg);
-        m_countLabel->setFocusPolicy(Qt::NoFocus);
+        m_countLabel = new FooterCountsButton(m_nav); m_countLabel->setCounterFont(fMsg);
         m_countLabel->setAccessibleName(u8("Сведения"));
         connect(m_countLabel, &QPushButton::clicked, [this]() { showInfo(); });
         footer->addWidget(m_countLabel);
@@ -2046,6 +2057,7 @@ protected:
         const QEvent::Type t = e->type();
         if (t == QEvent::ApplicationDeactivate) cancelBrightness();
         if (m_list && obj == m_list->viewport() && t == QEvent::Resize) m_pageTimer.start(0);
+        if (m_settingsScroll && obj == m_settingsScroll->viewport() && t == QEvent::Resize) updateResetGeometry();
         if (!(t == QEvent::TouchBegin || t == QEvent::TouchUpdate || t == QEvent::TouchEnd
               || t == QEvent::TouchCancel) || obj == this || !obj->isWidgetType())
             return false;
@@ -2140,7 +2152,8 @@ protected:
                     m_brightnessTracking = true; updateBrightness(p);
                 } else {
                     m_brightnessGesture.cancel();
-                    showMessage(u8("Регулировка яркости недоступна на этой прошивке"));
+                    klog(u8("brightness unavailable: ") + m_brightnessBackend->errorDetail());
+                    showMessage(u8("Яркость недоступна; подробности в журнале, если он включён"));
                 }
                 break;
             }
@@ -2825,8 +2838,13 @@ private:
         if (!m_pageLabel || !m_countLabel || !m_prev || !m_next) return;
         const int total = qMax(1, int(m_pageStarts.size()) - 1);
         m_prev->setEnabled(m_pageIndex > 0); m_next->setEnabled(m_pageIndex + 1 < total);
+        const QFontMetrics pageFont(m_pageLabel->font());
+        int digitWidth = 0;
+        for (char digit = '0'; digit <= '9'; ++digit) digitWidth = qMax(digitWidth, pageFont.width(QLatin1Char(digit)));
+        const int digits = QString::number(total).size();
+        m_pageLabel->setFixedWidth(2 * digits * digitWidth + pageFont.width(u8(" / ")) + 2);
         m_pageLabel->setText(u8("%1 / %2").arg(m_pageIndex + 1).arg(total));
-        m_countLabel->setText(u8("файлов: %1\nпапок: %2").arg(m_fileCount).arg(m_dirCount));
+        m_countLabel->setCounts(m_fileCount, m_dirCount);
     }
 
     // Нажатие на строку: папка — войти; файлы — открытие на следующем этапе
@@ -2940,7 +2958,7 @@ private:
         m_settingsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         QWidget *content = new QWidget(m_settingsScroll);
         QVBoxLayout *rows = new QVBoxLayout(content);
-        rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(qMax(8, GAP));
+        rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(qMax(16, GAP * 2));
         const double sc = SCREEN_DPI / 300.0;
         const int rowH = qMax(36, qRound(70 * sc));
         for (int i = 0; i < SET_COUNT; ++i) {
@@ -3010,16 +3028,23 @@ private:
                     r->addWidget(slider, 1);
                     m_plusBtns[i] = makeStepButton(r, fBtn, "+", rowH, bw, i, +1);
                     val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
-                    val->setFixedWidth(qMax(55, rowH)); r->addWidget(val);
+                    const QString range = QString::number(SET_ITEMS[i].lo, 'g', 6) + QChar(0x2013)
+                                        + QString::number(SET_ITEMS[i].hi, 'g', 6);
+                    const int valueWidth = qMax(QFontMetrics(fText).width(range),
+                                                QFontMetrics(fText).width(QString::number(SET_ITEMS[i].hi, 'f', SET_ITEMS[i].dec)));
+                    val->setFixedWidth(qMax(rowH, valueWidth + 8)); r->addWidget(val);
                 } else if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
                     QPushButton *pick = new QPushButton(line);
                     pick->setObjectName(u8("settingChoice_%1").arg(i));
                     pick->setFocusPolicy(Qt::NoFocus); pick->setMinimumHeight(rowH);
-                    pick->setFixedWidth(qMax(100, qRound(200 * sc)));
+                    pick->setFixedWidth(qMax(160, qRound(360 * sc)));
+                    pick->setProperty("choiceRowHeight", rowH);
                     pick->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;}"));
                     QHBoxLayout *choiceLayout = new QHBoxLayout(pick); choiceLayout->setContentsMargins(4, 0, 4, 0);
                     val = new QLabel(pick); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
-                    val->setMaximumWidth(qMax(90, qRound(180 * sc))); val->setAttribute(Qt::WA_TransparentForMouseEvents);
+                    val->setWordWrap(true); val->setMinimumWidth(0);
+                    val->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+                    val->setAttribute(Qt::WA_TransparentForMouseEvents);
                     choiceLayout->addWidget(val); r->addWidget(pick);
                     connect(pick, &QPushButton::clicked, [this, i]() {
                         if (SET_ITEMS[i].type == S_FONT) openFontPicker(i); else openBookPicker(i);
@@ -3064,7 +3089,9 @@ private:
         rows->addStretch(1);
         QHBoxLayout *resets = new QHBoxLayout();
         m_resetTabButton = makeButton(resets, fBtn, "Сбросить общие настройки", rowH, 0);
-        m_resetTabButton->setObjectName(u8("resetTab")); resets->addStretch(1); rows->addLayout(resets);
+        m_resetTabButton->setObjectName(u8("resetTab"));
+        m_resetTabButton->setProperty("baseRowHeight", rowH);
+        resets->addStretch(1); rows->addLayout(resets);
         connect(m_resetTabButton, &QPushButton::clicked, [this]() {
             m_pendingDelete = 7; m_resetTabPending = m_currentSettingsTab;
             m_confirmText->setText(m_currentSettingsTab == 0
@@ -3113,7 +3140,7 @@ private:
         }
         placePicker();
         m_fontPicker->show(); m_fontPicker->raise();
-        if (current) { current->setText(0, u8("✓  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+        if (current) { current->setText(0, u8("[x]  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void openBookPicker(int row) {
@@ -3132,7 +3159,7 @@ private:
         }
         placePicker();
         m_fontPicker->show(); m_fontPicker->raise();
-        if (current) { current->setText(0, u8("✓  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+        if (current) { current->setText(0, u8("[x]  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void chooseFont(QTreeWidgetItem *item) {
@@ -3169,10 +3196,26 @@ private:
         setButtonFace(m_advancedButtons[g], I_NONE, (m_groupExpanded[g] ? u8("− ") : u8("+ ")) + title);
     }
 
+    void updateResetGeometry() {
+        if (!m_resetTabButton || !m_settingsScroll) return;
+        ButtonFace *face = m_resetTabButton->findChild<ButtonFace *>();
+        if (!face) return;
+        const QFontMetrics fm(face->font());
+        const int desired = qMax(fm.width(u8("Сбросить общие настройки")),
+                                 fm.width(u8("Сбросить настройки шрифтов"))) + 2 * BTN_MARGIN + 8;
+        const int available = qMax(1, m_settingsScroll->viewport()->width());
+        const int buttonWidth = qMin(desired, available);
+        m_resetTabButton->setFixedWidth(buttonWidth);
+        const int textHeight = fm.boundingRect(0, 0, qMax(1, buttonWidth - 2 * BTN_MARGIN), 10000,
+                                               Qt::TextWordWrap | Qt::TextWrapAnywhere, face->text()).height();
+        m_resetTabButton->setMinimumHeight(qMax(m_resetTabButton->property("baseRowHeight").toInt(), textHeight + 8));
+    }
+
     void setSettingsTab(int tab) {
         m_currentSettingsTab = tab;
         if (m_resetTabButton) setButtonFace(m_resetTabButton, I_NONE, tab == 0
             ? u8("Сбросить общие настройки") : u8("Сбросить настройки шрифтов"));
+        updateResetGeometry();
         for (int g = 0; g < GroupCount; ++g)
             m_groupBlocks[g]->setVisible(settingGroupTab(static_cast<SettingGroup>(g)) == tab);
         m_generalTab->setEnabled(tab != 0); m_fontTab->setEnabled(tab != 1);
@@ -3253,11 +3296,7 @@ private:
                     ? (enabled ? u8("включена") : u8("отключена"))
                     : (enabled ? u8("показывать") : u8("скрывать"));
             }
-            if (SET_ITEMS[i].type == S_FONT) {
-                if (v.isEmpty()) shown = u8("Системный");
-                if (m_setLabels[i]) shown = QFontMetrics(m_setLabels[i]->font()).elidedText(
-                    shown, Qt::ElideRight, m_setLabels[i]->maximumWidth());
-            }
+            if (SET_ITEMS[i].type == S_FONT && v.isEmpty()) shown = u8("Системный");
             if (SET_ITEMS[i].type == S_OPEN)
                 shown = v == u8("1") ? u8("Всегда") : v == u8("0") ? u8("Никогда") : u8("Авто");
             if (SET_ITEMS[i].type == S_NUM) {
@@ -3270,7 +3309,18 @@ private:
                 if (m_minusBtns[i]) m_minusBtns[i]->setEnabled(!valid || number > SET_ITEMS[i].lo);
                 if (m_plusBtns[i]) m_plusBtns[i]->setEnabled(!valid || number < SET_ITEMS[i].hi);
             }
-            if (m_setLabels[i]) m_setLabels[i]->setText(shown);
+            if (m_setLabels[i]) {
+                m_setLabels[i]->setText(shown);
+                if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
+                    QPushButton *button = qobject_cast<QPushButton *>(m_setLabels[i]->parentWidget());
+                    if (button) {
+                        const int textWidth = qMax(1, button->minimumWidth() - 12);
+                        const int textHeight = QFontMetrics(m_setLabels[i]->font()).boundingRect(
+                            0, 0, textWidth, 10000, Qt::TextWordWrap | Qt::TextWrapAnywhere, shown).height();
+                        button->setMinimumHeight(qMax(button->property("choiceRowHeight").toInt(), textHeight + 12));
+                    }
+                }
+            }
             if (m_switches[i]) m_switches[i]->setChecked(v.toDouble() != 0);
         }
     }
@@ -3381,7 +3431,7 @@ private:
     QLabel       *m_confirmText = nullptr;
     ChromeButton *m_prev = nullptr, *m_next = nullptr;
     QLabel *m_pageLabel = nullptr;
-    QPushButton *m_countLabel = nullptr;
+    FooterCountsButton *m_countLabel = nullptr;
     int m_fileCount = 0, m_dirCount = 0;
     QScrollArea *m_settingsScroll = nullptr;
     QWidget *m_groupBlocks[GroupCount] = {}, *m_groupBodies[GroupCount] = {};

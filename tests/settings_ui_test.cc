@@ -4,6 +4,7 @@
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QTouchDevice>
+#include <QStandardItemModel>
 #include <cstdlib>
 
 class FakeBrightness : public BrightnessBackend {
@@ -31,6 +32,35 @@ static int row(const char *key) {
     require(false, "setting exists"); return -1;
 }
 class SettingsUiTest {
+    static void testFolderIcons(KobrowseWindow &w) {
+        QStandardItemModel model(1, 1);
+        const QModelIndex index = model.index(0, 0);
+        model.setData(index, QString::fromUtf8("folder"), Qt::DisplayRole);
+        model.setData(index, true, ROLE_DIR);
+        QStyleOptionViewItem option; option.rect = QRect(0, 0, 400, 90);
+        const QPoint inside(6 + ICON_PX / 2, 10 + ICON_PX / 2);
+        for (int mode = 0; mode < 3; ++mode) {
+            model.setData(index, mode == 1, ROLE_READONLY);
+            model.setData(index, mode == 2, ROLE_MARK);
+            QImage image(400, 90, QImage::Format_RGB32); image.fill(Qt::white);
+            QPainter painter(&image); w.m_fileDelegate->paint(&painter, option, index); painter.end();
+            require(QColor(image.pixel(inside)) == itemIconColor(mode == 1, mode == 2), "folder icon has filled correct ink");
+        }
+    }
+    static void testFooter(KobrowseWindow &w) {
+        const std::vector<int> originalPages = w.m_pageStarts;
+        const int originalIndex = w.m_pageIndex, oldFiles = w.m_fileCount, oldDirs = w.m_dirCount;
+        w.m_pageStarts.assign(13, 0); w.m_pageIndex = 0; w.m_fileCount = 1; w.m_dirCount = 9;
+        w.updatePageInfo(); QApplication::processEvents();
+        const int pageX = w.m_pageLabel->x(), pageWidth = w.m_pageLabel->width();
+        const int countX = w.m_countLabel->x(), countWidth = w.m_countLabel->width();
+        w.m_pageIndex = 9; w.m_fileCount = 999999; w.m_dirCount = 12345;
+        w.updatePageInfo(); QApplication::processEvents();
+        require(w.m_pageLabel->x() == pageX && w.m_pageLabel->width() == pageWidth, "page indicator stays fixed");
+        require(w.m_countLabel->x() == countX && w.m_countLabel->width() == countWidth, "count table stays fixed");
+        w.m_pageStarts = originalPages; w.m_pageIndex = originalIndex;
+        w.m_fileCount = oldFiles; w.m_dirCount = oldDirs; w.updatePageInfo();
+    }
     static void touch(KobrowseWindow &w, QEvent::Type type, const QPoint &point, int count = 1) {
         QTouchDevice device; device.setType(QTouchDevice::TouchScreen);
         Qt::TouchPointState state = type == QEvent::TouchBegin ? Qt::TouchPointPressed
@@ -100,6 +130,13 @@ public:
     static void run(KobrowseWindow &w, const QString &homeFile) {
         w.resize(768, 1024); w.show(); QApplication::processEvents();
         require(w.m_deviceStatus->height() < 50, "compact status row");
+        QLabel *clock = w.m_deviceStatus->findChild<QLabel *>("statusClock");
+        QLabel *batteryLabel = w.m_deviceStatus->findChild<QLabel *>("statusBattery");
+        require(clock && batteryLabel && clock->font().pixelSize() == 26 && batteryLabel->font().pixelSize() == 26,
+                "status labels use explicit compact font");
+        require(clock->font().family() == batteryLabel->font().family() && !clock->styleSheet().isEmpty(),
+                "status labels use the same explicit sans font and override inherited stylesheet");
+        testFolderIcons(w); testFooter(w);
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
         require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");
@@ -133,6 +170,16 @@ public:
         require(!w.findChild<QPushButton *>("resetAll"), "no global reset");
         require(w.m_sliders[hold] && w.m_minusBtns[hold] && w.m_plusBtns[hold], "hold time uses slider and buttons");
         require(w.m_sliders[font] && w.m_minusBtns[font] && w.m_plusBtns[font], "font slider has buttons");
+        for (int screenWidth : {600, 768, 1180}) {
+            w.resize(screenWidth, 1024); QApplication::processEvents();
+            require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "settings never overflow horizontally");
+            const QLabel *range = w.m_setLabels[hold];
+            require(range->width() >= QFontMetrics(range->font()).width(QString::fromUtf8("150–3000")), "hold range fully fits");
+            const ButtonFace *face = reset->findChild<ButtonFace *>();
+            require(face && face->width() >= QFontMetrics(face->font()).width(face->text()) + 2 * BTN_MARGIN,
+                    "reset button label fits without clipping");
+        }
+        w.resize(768, 1024); QApplication::processEvents();
         const int oldHold = LONG_TAP_MS; w.m_plusBtns[hold]->click();
         require(LONG_TAP_MS == oldHold + 50 && w.m_settings->isVisible(), "hold setting saved immediately");
         w.stepSetting(adds, 1); QApplication::processEvents();
@@ -144,13 +191,23 @@ public:
         QPushButton *choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(books));
         require(choice, "current book choice is clickable"); choice->click();
         require(w.m_fontPicker->isVisible() && w.m_fontPicker->currentItem()
-            && w.m_fontPicker->currentItem()->text(0).startsWith(QString::fromUtf8("✓")), "current choice marked");
+            && w.m_fontPicker->currentItem()->text(0).startsWith(QString::fromUtf8("[x]")), "current choice marked");
         w.chooseFont(w.m_fontPicker->topLevelItem(3)); require(OPEN_BOOKS == "0", "book choice applies immediately");
         w.setSettingsTab(1); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "font tab fits screen");
         choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(family));
-        require(choice, "current font choice is clickable"); choice->click();
-        require(w.m_fontPicker->currentItem() && w.m_fontPicker->currentItem()->text(0).startsWith(QString::fromUtf8("✓")), "current font marked");
+        require(choice, "current font choice is clickable");
+        const QString originalFont = w.m_setVals[family];
+        w.m_setVals[family] = QString::fromUtf8("IBM Plex Sans"); w.refreshSettings(); QApplication::processEvents();
+        require(w.m_setLabels[family]->text() == QString::fromUtf8("IBM Plex Sans")
+                && w.m_setLabels[family]->width() >= QFontMetrics(w.m_setLabels[family]->font()).width(w.m_setLabels[family]->text()),
+                "font choice displays the complete name");
+        w.m_setVals[family] = originalFont; w.refreshSettings();
+        ButtonFace *fontResetFace = reset->findChild<ButtonFace *>();
+        require(fontResetFace && fontResetFace->width() >= QFontMetrics(fontResetFace->font()).width(fontResetFace->text()) + 2 * BTN_MARGIN,
+                "font reset label fits");
+        choice->click();
+        require(w.m_fontPicker->currentItem() && w.m_fontPicker->currentItem()->text(0).startsWith(QString::fromUtf8("[x]")), "current font marked");
         w.chooseFont(w.m_fontPicker->topLevelItem(0));
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");

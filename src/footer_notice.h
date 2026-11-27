@@ -5,6 +5,38 @@
 #include <QTextLayout>
 #include <QFontMetrics>
 #include <QStringList>
+#include <QPushButton>
+
+// A stable, left-aligned two-column count display that remains a button.
+class FooterCountsButton : public QPushButton {
+public:
+    explicit FooterCountsButton(QWidget *parent = nullptr) : QPushButton(parent) { setFocusPolicy(Qt::NoFocus); }
+    void setCounterFont(const QFont &value) {
+        setFont(value);
+        const QFontMetrics fm(value);
+        labelWidth = qMax(fm.width(QString::fromUtf8("файлов:")), fm.width(QString::fromUtf8("папок:"))) + fm.width(QLatin1Char(' '));
+        int digitWidth = 0;
+        for (char digit = '0'; digit <= '9'; ++digit) digitWidth = qMax(digitWidth, fm.width(QLatin1Char(digit)));
+        // Counters are int; reserve the widest possible non-negative value.
+        setFixedWidth(labelWidth + 10 * digitWidth + 2);
+    }
+    void setCounts(int files, int folders) {
+        if (fileCount == files && folderCount == folders) return;
+        fileCount = files; folderCount = folders; update();
+    }
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter p(this); p.setFont(font()); p.setPen(Qt::black);
+        const int line = QFontMetrics(font()).lineSpacing();
+        const int top = (height() - 2 * line) / 2;
+        p.drawText(QRect(0, top, labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::fromUtf8("файлов:"));
+        p.drawText(QRect(0, top + line, labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::fromUtf8("папок:"));
+        p.drawText(QRect(labelWidth, top, width() - labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(fileCount));
+        p.drawText(QRect(labelWidth, top + line, width() - labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::number(folderCount));
+    }
+private:
+    int labelWidth = 0, fileCount = -1, folderCount = -1;
+};
 
 // Constrain notices to two lines without changing the height of the file list.
 inline QStringList footerNoticeLines(const QString &message, const QFont &font, int width) {

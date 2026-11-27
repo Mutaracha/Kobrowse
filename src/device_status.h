@@ -56,14 +56,24 @@ public:
     explicit DeviceStatusBar(QWidget *parent = nullptr, const QString &powerDirectory = QString::fromLatin1("/sys/class/power_supply"))
         : QWidget(parent), powerDirectory(powerDirectory) {
         QHBoxLayout *row = new QHBoxLayout(this); row->setContentsMargins(0, 0, 0, 0);
-        m_clock = new QLabel(this); row->addWidget(m_clock); row->addStretch(1);
-        m_battery = new QLabel(this); row->addWidget(m_battery);
+        m_clock = new QLabel(this); m_clock->setObjectName(QLatin1String("statusClock")); row->addWidget(m_clock); row->addStretch(1);
+        m_battery = new QLabel(this); m_battery->setObjectName(QLatin1String("statusBattery")); row->addWidget(m_battery);
         m_icon = new BatteryIcon(this); row->addWidget(m_icon);
         connect(&timer, &QTimer::timeout, this, [this]() { refresh(); });
         if (QGuiApplication *app = qobject_cast<QGuiApplication *>(QCoreApplication::instance()))
             connect(app, &QGuiApplication::applicationStateChanged, this,
                     [this](Qt::ApplicationState state) { if (state == Qt::ApplicationActive) refresh(); });
         timer.start(60000); refresh();
+    }
+    void setStatusFont(const QFont &font) {
+        setFont(font);
+        // Nickel may supply a QLabel font via its application stylesheet.
+        // Set both the actual font and a local rule on each label.
+        QString family = font.family(); family.remove(QLatin1Char('"')); family.remove(QLatin1Char('\\'));
+        const QString style = QString::fromLatin1("font-family: \"%1\"; font-size: %2px; font-weight: normal;")
+            .arg(family).arg(font.pixelSize());
+        m_clock->setFont(font); m_clock->setStyleSheet(style);
+        m_battery->setFont(font); m_battery->setStyleSheet(style);
     }
     void setScale(qreal scale) {
         m_icon->setScale(scale);

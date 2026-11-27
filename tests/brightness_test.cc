@@ -42,9 +42,15 @@ int main(int argc, char **argv) {
     require(!g.move(QPoint(60, 600)) && !g.move(QPoint(5, 400)), "horizontal intent cannot become brightness");
     g.begin(QPoint(5, 600), screen, false);
     require(!g.move(QPoint(5, 400)), "disabled gesture");
-    require(NativeBrightness::firmwareSupported("serial,kernel,4.38.23697,other\n"), "target firmware accepted");
-    require(NativeBrightness::firmwareSupported("serial,kernel,4.46.23836"), "documented Kobalt ABI accepted");
-    require(!NativeBrightness::firmwareSupported("serial,kernel,4.38.99999"), "unknown firmware refused");
+    require(NativeBrightness::firmwareSupported("serial,kernel,4.38.21908,other\n"), "minimum accepted");
+    require(NativeBrightness::firmwareSupported("serial,kernel,4.38.99999"), "newer patch accepted");
+    require(NativeBrightness::firmwareSupported("serial,kernel,4.40.1"), "newer minor accepted numerically");
+    require(NativeBrightness::firmwareSupported("serial,kernel,5.0.1"), "newer major accepted");
+    require(!NativeBrightness::firmwareSupported("serial,kernel,4.38.21907"), "older patch refused");
+    require(!NativeBrightness::firmwareSupported("serial,kernel,4.9.99999"), "older minor refused numerically");
+    require(!NativeBrightness::firmwareSupported("serial,kernel,4.38.21908extra"), "suffix refused");
+    require(!NativeBrightness::firmwareSupported("serial,kernel,4.38.-1"), "negative version refused");
+    require(!NativeBrightness::firmwareSupported("serial,kernel,4.38.999999999999999999999999"), "overflow refused");
     require(!NativeBrightness::firmwareSupported("bad"), "malformed firmware refused");
 
     NativeBrightness::Api api;
@@ -55,7 +61,7 @@ int main(int argc, char **argv) {
     {
         NativeBrightness::Api missing = api; missing.finishGesture = nullptr;
         NativeBrightness unavailable(&parent, missing, sizeof(FakeLight), sizeof(FakeGesture));
-        require(!unavailable.begin(), "missing symbol disables native brightness");
+        require(!unavailable.begin() && unavailable.errorDetail().contains("finishGesture"), "missing symbol disables native brightness and is named");
         hasSensor = true;
         NativeBrightness light(&parent, api, sizeof(FakeLight), sizeof(FakeGesture));
         require(!light.begin(), "sensor device disabled to preserve automatic mode");
