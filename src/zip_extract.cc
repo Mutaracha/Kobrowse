@@ -209,6 +209,7 @@ bool extractZipArchive(const QString &root, const QString &archive, QString &pub
         error = QString::fromUtf8("Не удалось прочитать временную папку");
         cleanupStage(root, stage, error, hooks); return false;
     }
+    std::stable_sort(entries.begin(), entries.end(), browserEntryLess);
     QStringList completed;
     for (const QFileInfo &entry : entries) {
         const QString original = entry.fileName();
