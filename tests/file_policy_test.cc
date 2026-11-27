@@ -51,7 +51,8 @@ int main(int argc, char **argv) {
     ZipPathManifest malformed;
     require(!malformed.add(QByteArray("\\xff", 1), true, false, zipError), "invalid UTF-8 rejected");
     require(!malformed.add(QByteArray("a\\0b", 3), true, false, zipError), "NUL rejected");
-    require(fileKind("Книга.KEPUB.EPUB") == FileBook && fileKind("read.PDF") == FileBook, "book icons");
+    require(fileKind("Книга.KEPUB.EPUB") == FileEpub && fileKind("read.PDF") == FilePdf
+            && fileKind("novel.FB2") == FileFb2 && fileKind("book.mobi") == FileBook, "book format icons");
     require(fileKind("picture.TIFF") == FileImage && fileKind("photo.JPEG") == FileImage, "image icons");
     require(fileKind("book.fb2.zip") == FileArchive && fileKind("comic.CBR") == FileArchive, "archive icons");
     require(fileKind("file.zip.txt") == FileBook && fileKind("folder-epub") == FileGeneric, "file extension boundaries");

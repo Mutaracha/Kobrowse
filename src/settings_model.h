@@ -25,11 +25,11 @@ inline int settingGroupTab(SettingGroup group) {
     return -1;
 }
 inline bool settingGroupAdvanced(SettingGroup) { return false; }
-inline QString settingNumberDisplay(const QString &value, double lo, double hi, bool autoZero) {
+inline QString settingNumberDisplay(const QString &value, double lo, double hi, bool autoZero, const QString &suffix = QString()) {
     bool ok = false;
     const double number = QString(value).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&ok);
     const QString shown = autoZero && ok && number == 0 ? QString::fromUtf8("Авто") : value;
-    return shown + QLatin1Char('\n') + QString::number(lo, 'g', 6)
+    return shown + suffix + QLatin1Char('\n') + QString::number(lo, 'g', 6)
         + QChar(0x2013) + QString::number(hi, 'g', 6);
 }
 inline void resetSettingsDraft(const QStringList &keys, const QStringList &defaults,

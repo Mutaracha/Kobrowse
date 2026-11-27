@@ -24,9 +24,13 @@ public:
         if (fileCount == files && folderCount == folders) return;
         fileCount = files; folderCount = folders; update();
     }
+    QSize sizeHint() const override { return QSize(width(), QFontMetrics(font()).lineSpacing() * 2 + 8); }
+    QSize minimumSizeHint() const override { return sizeHint(); }
 protected:
     void paintEvent(QPaintEvent *) override {
-        QPainter p(this); p.setFont(font()); p.setPen(Qt::black);
+        QPainter p(this); p.setFont(font());
+        if (isDown()) p.fillRect(rect(), Qt::black);
+        p.setPen(isDown() ? Qt::white : Qt::black);
         const int line = QFontMetrics(font()).lineSpacing();
         const int top = (height() - 2 * line) / 2;
         p.drawText(QRect(0, top, labelWidth, line), Qt::AlignLeft | Qt::AlignVCenter, QString::fromUtf8("файлов:"));

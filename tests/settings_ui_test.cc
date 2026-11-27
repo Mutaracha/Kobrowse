@@ -47,11 +47,29 @@ class SettingsUiTest {
             require(QColor(image.pixel(inside)) == itemIconColor(mode == 1, mode == 2), "folder icon has filled correct ink");
         }
     }
+    static void testNames(KobrowseWindow &w) {
+        QStandardItemModel model(1, 1);
+        const QModelIndex index = model.index(0, 0);
+        const QString name = QString::fromUtf8("A very long book title with a lot of words and a recognizable ending.epub");
+        model.setData(index, name, Qt::DisplayRole);
+        for (int width : {320, 600, 768}) {
+            w.resize(width, 1024); QApplication::processEvents();
+            const QString shown = w.m_fileDelegate->displayedName(index);
+            require(!shown.contains(QLatin1Char('\n')), "file name remains a single line");
+            const int available = w.m_list->viewport()->width() - qMax(16, ICON_PX) - 18;
+            require(QFontMetrics(w.m_list->font()).width(shown) <= available, "elided name fits viewport");
+            if (shown != name) require(shown.endsWith(QString::fromUtf8(".epub")), "elision preserves extension");
+        }
+        w.resize(768, 1024); QApplication::processEvents();
+    }
     static void testFooter(KobrowseWindow &w) {
         const std::vector<int> originalPages = w.m_pageStarts;
         const int originalIndex = w.m_pageIndex, oldFiles = w.m_fileCount, oldDirs = w.m_dirCount;
         w.m_pageStarts.assign(13, 0); w.m_pageIndex = 0; w.m_fileCount = 1; w.m_dirCount = 9;
         w.updatePageInfo(); QApplication::processEvents();
+        require(w.m_countLabel->height() >= QFontMetrics(w.m_countLabel->font()).lineSpacing() * 2,
+                "footer counters have room for both lines");
+        require(w.m_prev->geometry().center().y() == w.m_next->geometry().center().y(), "page controls aligned");
         const int pageX = w.m_pageLabel->x(), pageWidth = w.m_pageLabel->width();
         const int countX = w.m_countLabel->x(), countWidth = w.m_countLabel->width();
         w.m_pageIndex = 9; w.m_fileCount = 999999; w.m_dirCount = 12345;
@@ -73,6 +91,22 @@ class SettingsUiTest {
         }
         QTouchEvent event(type, &device, Qt::NoModifier, state, points);
         w.handleTouch(&event);
+    }
+    static void testTouchFeedback(KobrowseWindow &w) {
+        QPushButton *button = w.m_next->isEnabled() ? w.m_next : w.m_countLabel;
+        const QPoint point = button->mapTo(&w, button->rect().center());
+        touch(w, QEvent::TouchBegin, point);
+        require(button->isDown(), "touch starts pressed feedback");
+        touch(w, QEvent::TouchCancel, point, 0);
+        require(!button->isDown(), "cancel clears pressed feedback");
+        touch(w, QEvent::TouchBegin, point);
+        touch(w, QEvent::TouchUpdate, point + QPoint(SWIPE_PX + 10, 0));
+        require(!button->isDown(), "drag clears pressed feedback");
+        touch(w, QEvent::TouchCancel, point, 0);
+        touch(w, QEvent::TouchBegin, point);
+        touch(w, QEvent::TouchUpdate, point, 2);
+        require(!button->isDown(), "second finger clears pressed feedback");
+        touch(w, QEvent::TouchCancel, point, 0);
     }
     static void testBrightness(KobrowseWindow &w) {
         FakeBrightness fake; w.m_brightnessBackend = &fake;
@@ -136,7 +170,7 @@ public:
                 "status labels use explicit compact font");
         require(clock->font().family() == batteryLabel->font().family() && !clock->styleSheet().isEmpty(),
                 "status labels use the same explicit sans font and override inherited stylesheet");
-        testFolderIcons(w); testFooter(w);
+        testFolderIcons(w); testNames(w); testFooter(w); testTouchFeedback(w);
         const QString folder = w.m_root + "/.adds";
         w.m_marked.insert(folder); w.m_menuRequested = true; w.updateActions();
         require(w.m_actions->topLevelItemCount() >= 7, "folder actions shown");
@@ -191,8 +225,9 @@ public:
         QPushButton *choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(books));
         require(choice, "current book choice is clickable"); choice->click();
         require(w.m_fontPicker->isVisible() && w.m_fontPicker->currentItem()
-            && w.m_fontPicker->currentItem()->text(0).startsWith(QString::fromUtf8("[x]")), "current choice marked");
-        w.chooseFont(w.m_fontPicker->topLevelItem(3)); require(OPEN_BOOKS == "0", "book choice applies immediately");
+            && w.m_fontPicker->currentItem()->isSelected() && w.m_fontPicker->topLevelItemCount() == 3,
+            "current choice selected and no cancel item");
+        w.chooseFont(w.m_fontPicker->topLevelItem(2)); require(OPEN_BOOKS == "0", "book choice applies immediately");
         w.setSettingsTab(1); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "font tab fits screen");
         choice = w.findChild<QPushButton *>(QString("settingChoice_%1").arg(family));
@@ -207,7 +242,11 @@ public:
         require(fontResetFace && fontResetFace->width() >= QFontMetrics(fontResetFace->font()).width(fontResetFace->text()) + 2 * BTN_MARGIN,
                 "font reset label fits");
         choice->click();
-        require(w.m_fontPicker->currentItem() && w.m_fontPicker->currentItem()->text(0).startsWith(QString::fromUtf8("[x]")), "current font marked");
+        require(w.m_fontPicker->currentItem() && w.m_fontPicker->currentItem()->isSelected(), "current font selected");
+        require(w.m_fontPicker->topLevelItemCount() == w.m_fonts.size(), "font picker has no cancel item");
+        if (w.m_fonts.size() > 1)
+            require(w.m_fontPicker->topLevelItem(1)->font(0).family() == w.m_fonts.at(1), "font choice uses its own family");
+        require(w.m_setLabels[font]->text().contains(QString::fromUtf8(" пт")), "font size includes points");
         w.chooseFont(w.m_fontPicker->topLevelItem(0));
         const int beforeFont = LIST_PX; w.m_plusBtns[font]->click();
         require(LIST_PX > beforeFont && w.m_list->font().pixelSize() == LIST_PX, "font applies immediately");
@@ -232,6 +271,13 @@ public:
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
+    for (qreal scale : {167.0 / 300, 212.0 / 300, 1.0}) {
+        SettingSlider slider(0, 100, 1, nullptr, scale);
+        require(slider.minimumHeight() >= 48 && slider.minimumWidth() >= 90, "slider touch target at different densities");
+        slider.resize(240, slider.minimumHeight()); slider.setValue(20);
+        slider.begin(220); require(slider.value() > 20, "slider geometry follows touch");
+        slider.cancel(); require(slider.value() == 20, "slider cancel restores value");
+    }
     QTemporaryDir tmp; require(tmp.isValid(), "temporary root");
     const QString power = tmp.path() + "/power";
     require(QDir().mkpath(power + "/battery"), "battery fixture directory");

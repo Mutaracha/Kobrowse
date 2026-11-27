@@ -341,8 +341,15 @@ public:
     RowDelegate(QWidget *view, const QFont &f) : QStyledItemDelegate(view), m_view(view), m_font(f) {}
     void setMaxRowHeight(int height) { m_maxHeight = height; }
     void setListFont(const QFont &font) { m_font = font; }
+    QString displayedName(const QModelIndex &idx) const {
+        QString name = idx.data().toString();
+        name.replace(QLatin1Char('\n'), QLatin1Char(' '));
+        name.replace(QLatin1Char('\r'), QLatin1Char(' '));
+        name.replace(QLatin1Char('\t'), QLatin1Char(' '));
+        return QFontMetrics(fontFor(idx)).elidedText(name, Qt::ElideMiddle, int(textWidth()));
+    }
     QSize sizeHint(const QStyleOptionViewItem &, const QModelIndex &idx) const override {
-        const qreal h = layoutText(idx.data().toString(), fontFor(idx), textWidth());
+        const qreal h = layoutText(displayedName(idx), fontFor(idx), textWidth());
         const QString detail = idx.data(ROLE_DETAIL).toString();
         const qreal d = detail.isEmpty() ? 0 : layoutText(detail, detailFont(), textWidth());
         const int wanted = qMax(iconSize(), int(h + d)) + 2 * PAD_V + 1;
@@ -379,6 +386,16 @@ public:
                 p->drawLine(QPointF(box.left() + sz * .12, box.top()), QPointF(box.left() + sz * .12, box.bottom()));
                 p->drawLine(QPointF(box.left() + sz * .23, box.top() + sz * .27), QPointF(box.right() - sz * .10, box.top() + sz * .27));
                 p->drawLine(QPointF(box.left() + sz * .23, box.top() + sz * .40), QPointF(box.right() - sz * .10, box.top() + sz * .40));
+            } else if (kind == FileFb2 || kind == FilePdf) {
+                QFont badge(u8("Sans Serif")); badge.setBold(true); badge.setPixelSize(qMax(8, qRound(sz * .32)));
+                p->setFont(badge);
+                p->drawText(box, Qt::AlignCenter, kind == FileFb2 ? u8("F2") : u8("PDF"));
+            } else if (kind == FileEpub) {
+                p->drawLine(QPointF(box.center().x(), box.top() + sz * .18), QPointF(box.center().x(), box.bottom() - sz * .16));
+                p->drawLine(QPointF(box.left() + sz * .06, box.top() + sz * .26), QPointF(box.center().x(), box.top() + sz * .34));
+                p->drawLine(QPointF(box.center().x(), box.top() + sz * .34), QPointF(box.right() - sz * .06, box.top() + sz * .26));
+                p->drawLine(QPointF(box.left() + sz * .06, box.bottom() - sz * .25), QPointF(box.center().x(), box.bottom() - sz * .17));
+                p->drawLine(QPointF(box.center().x(), box.bottom() - sz * .17), QPointF(box.right() - sz * .06, box.bottom() - sz * .25));
             } else if (kind == FileImage) {
                 p->drawEllipse(QPointF(box.left() + sz * .20, box.top() + sz * .21), sz * .06, sz * .06);
                 QPolygonF mountains;
@@ -389,25 +406,23 @@ public:
                           << QPointF(box.right() - sz * .05, box.bottom() - sz * .10);
                 p->drawPolyline(mountains);
             } else if (kind == FileArchive) {
-                p->drawLine(QPointF(box.center().x(), box.top()), QPointF(box.center().x(), box.bottom() - sz * .16));
-                p->drawRect(QRectF(box.center().x() - sz * .07, box.bottom() - sz * .20, sz * .14, sz * .12));
+                p->save();
+                p->fillRect(box.adjusted(sz * .07, sz * .07, -sz * .07, -sz * .07), p->pen().color());
+                p->setPen(QPen(mark ? Qt::black : Qt::white, qMax(1, sz / 14), Qt::DashLine));
+                p->drawLine(QPointF(box.center().x(), box.top() + sz * .10), QPointF(box.center().x(), box.bottom() - sz * .14));
+                p->restore();
             }
         }
         p->setPen(ink);
         const QPointF pos(opt.rect.left() + PAD_H * 2 + sz, opt.rect.top() + PAD_V);
-        QString name = idx.data().toString();
-        const qreal fullHeight = layoutText(name, fontFor(idx), textWidth());
-        const qreal detailHeight = idx.data(ROLE_DETAIL).toString().isEmpty() ? 0
-            : layoutText(idx.data(ROLE_DETAIL).toString(), detailFont(), textWidth());
-        if (m_maxHeight > 0 && fullHeight + detailHeight + 2 * PAD_V + 1 > m_maxHeight)
-            name = QFontMetrics(fontFor(idx)).elidedText(name, Qt::ElideMiddle, int(textWidth()));
+        const QString name = displayedName(idx);
         p->setClipRect(opt.rect);
         const qreal h = layoutText(name, fontFor(idx), textWidth(), p, pos);
         const QString detail = idx.data(ROLE_DETAIL).toString();
         if (!detail.isEmpty())
             layoutText(detail, detailFont(), textWidth(), p, QPointF(pos.x(), pos.y() + h));
         if (!mark) {
-            p->setPen(QColor(150, 150, 150));
+            p->setPen(QPen(Qt::black, qMax(1, qRound(1.5 * SCREEN_DPI / 300.0))));
             p->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
         }
         p->restore();
@@ -421,7 +436,11 @@ private:
         f.setBold(idx.data(ROLE_DIR).toBool());
         return f;
     }
-    qreal textWidth() const { return qMax(40, m_view->width() - iconSize() - 3 * PAD_H); }
+    qreal textWidth() const {
+        const QAbstractScrollArea *area = qobject_cast<const QAbstractScrollArea *>(m_view);
+        const int width = area ? area->viewport()->width() : m_view->width();
+        return qMax(1, width - iconSize() - 3 * PAD_H);
+    }
     QWidget *m_view;
     QFont m_font;
     int m_maxHeight = 0;
@@ -587,12 +606,13 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing, true);
-        const bool on = parentWidget() ? parentWidget()->isEnabled() : true;
-        const QColor c = on ? Qt::black : QColor(160, 160, 160);
-        // Рамка со сглаженными скруглёнными углами (вместо рамки из стилей Qt)
+        QPushButton *button = qobject_cast<QPushButton *>(parentWidget());
+        const bool on = !button || button->isEnabled();
+        const bool inverted = button && (button->isDown() || button->property("selectedTab").toBool());
+        const QColor c = inverted ? QColor(Qt::white) : (on ? QColor(Qt::black) : QColor(160, 160, 160));
         const qreal h = BTN_PEN / 2.0;
-        p.setPen(QPen(c, BTN_PEN));
-        p.setBrush(Qt::white);
+        p.setPen(QPen(on ? QColor(Qt::black) : QColor(160, 160, 160), BTN_PEN));
+        p.setBrush(inverted ? Qt::black : Qt::white);
         p.drawRoundedRect(QRectF(rect()).adjusted(h, h, -h, -h), BTN_RADIUS, BTN_RADIUS);
         p.setPen(c);
         p.setFont(font());
@@ -624,10 +644,12 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this);
-        const QColor ink = isEnabled() ? QColor(Qt::black) : QColor(165, 165, 165);
+        const bool pressed = isEnabled() && isDown();
+        const QColor ink = pressed ? QColor(Qt::white) : (isEnabled() ? QColor(Qt::black) : QColor(165, 165, 165));
+        if (pressed) p.fillRect(rect(), Qt::black);
         if (m_framed) {
             p.setRenderHint(QPainter::Antialiasing, true); p.setPen(QPen(ink, qMax(1.0, BTN_PEN)));
-            p.setBrush(Qt::white); p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), BTN_RADIUS, BTN_RADIUS);
+            p.setBrush(pressed ? Qt::black : Qt::white); p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), BTN_RADIUS, BTN_RADIUS);
         }
         const int iconSize = qRound(ICON_PX * m_iconScale * ((m_icon == I_CHEV_UP || m_icon == I_CHEV_DOWN) ? 1.6 : 1.0));
         const int size = qMin(iconSize, qMin(height() - 8, width() - 8));
@@ -654,12 +676,14 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter p(this); p.setRenderHint(QPainter::Antialiasing, true);
+        const bool pressed = isDown();
+        if (pressed) p.fillRect(rect(), Qt::black);
         const qreal h = qMax(12, qMin(height() - 8, width() / 2));
         const QRectF track((width() - 2*h)/2, (height()-h)/2, 2*h, h);
-        p.setPen(QPen(Qt::black, qMax(1.0, h / 18.0)));
-        p.setBrush(isChecked() ? Qt::black : Qt::white);
+        p.setPen(QPen(pressed ? Qt::white : Qt::black, qMax(1.0, h / 18.0)));
+        p.setBrush((isChecked() != pressed) ? Qt::black : Qt::white);
         p.drawRoundedRect(track, h/2, h/2);
-        p.setBrush(isChecked() ? Qt::white : Qt::black);
+        p.setBrush((isChecked() != pressed) ? Qt::white : Qt::black);
         p.setPen(Qt::NoPen);
         const qreal d = h * 0.7;
         p.drawEllipse(QRectF(isChecked() ? track.right()-d-h*.15 : track.left()+h*.15,
@@ -1826,7 +1850,7 @@ public:
 
         m_toolbar = new QWidget(this);
         QHBoxLayout *toolbar = new QHBoxLayout(m_toolbar);
-        toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(GAP);
+        toolbar->setContentsMargins(0, 0, 0, 0); toolbar->setSpacing(qMax(6, GAP * 3 / 2));
         ChromeButton *back = new ChromeButton(I_BACK, u8("Закрыть Kobrowse"), m_toolbar, true);
         QFont backFont = QFont(u8("Sans Serif")); backFont.setPixelSize(qMax(18, qRound(8 * SCREEN_DPI / 72.0)));
         back->setFont(backFont); back->setIconScale(1.25);
@@ -1948,8 +1972,8 @@ public:
         m_fontPicker->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         m_fontPicker->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         m_fontPicker->setStyleSheet(u8("QTreeWidget{background:white;color:black;border:2px solid black;}"
-                                      "QTreeWidget::item{padding-left:12px;border-bottom:1px solid #aaa;}"
-                                      "QTreeWidget::item:selected{background:black;color:white;}"));
+                                      "QTreeWidget::item{padding-left:12px;border-bottom:2px solid black;}"
+                                      "QTreeWidget::item:selected,QTreeWidget::item:selected:!active{background:black;color:white;}"));
         m_fontPicker->setSelectionMode(QAbstractItemView::SingleSelection);
         m_fontPicker->hide();
         connect(m_fontPicker, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem *item, int) {
@@ -2005,14 +2029,14 @@ public:
         m_footerLine = new QFrame(this); m_footerLine->setFrameShape(QFrame::HLine); lay->addWidget(m_footerLine);
         m_nav = new QWidget(this);
         QHBoxLayout *footer = new QHBoxLayout(m_nav);
-        footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(GAP);
+        footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(qMax(6, GAP * 3 / 2));
         m_prev = new ChromeButton(I_CHEV_UP, QString(), m_nav);
         m_next = new ChromeButton(I_CHEV_DOWN, QString(), m_nav);
         m_prev->setAccessibleName(u8("Предыдущая страница"));
         m_next->setAccessibleName(u8("Следующая страница"));
         const int footerHeight = qMax(qMax(40, chromeHeight * 3 / 4), QFontMetrics(fMsg).lineSpacing() * 2 + 4);
         m_prev->setFixedSize(footerHeight, footerHeight); m_next->setFixedSize(footerHeight, footerHeight);
-        footer->addWidget(m_prev); footer->addWidget(m_next);
+        footer->addWidget(m_prev, 0, Qt::AlignVCenter); footer->addWidget(m_next, 0, Qt::AlignVCenter);
         m_pageLabel = new QLabel(m_nav); m_pageLabel->setFont(fMsg);
         m_pageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         footer->addWidget(m_pageLabel);
@@ -2020,6 +2044,9 @@ public:
         m_footerNotice->setFixedHeight(footerHeight);
         footer->addWidget(m_footerNotice, 1);
         m_countLabel = new FooterCountsButton(m_nav); m_countLabel->setCounterFont(fMsg);
+        m_countLabel->setMinimumHeight(footerHeight);
+        m_countLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        m_nav->setMinimumHeight(footerHeight);
         m_countLabel->setAccessibleName(u8("Сведения"));
         connect(m_countLabel, &QPushButton::clicked, [this]() { showInfo(); });
         footer->addWidget(m_countLabel);
@@ -2055,7 +2082,7 @@ protected:
     // (скрытие ряда кнопок, перестройка списка), касание внутри окна попадёт сюда.
     bool eventFilter(QObject *obj, QEvent *e) override {
         const QEvent::Type t = e->type();
-        if (t == QEvent::ApplicationDeactivate) cancelBrightness();
+        if (t == QEvent::ApplicationDeactivate) { setTouchButton(nullptr); cancelBrightness(); }
         if (m_list && obj == m_list->viewport() && t == QEvent::Resize) m_pageTimer.start(0);
         if (m_settingsScroll && obj == m_settingsScroll->viewport() && t == QEvent::Resize) updateResetGeometry();
         if (!(t == QEvent::TouchBegin || t == QEvent::TouchUpdate || t == QEvent::TouchEnd
@@ -2083,6 +2110,7 @@ protected:
         const QPoint p = pts.isEmpty() ? QPoint() : mapFromGlobal(pts.first().screenPos().toPoint());
         switch (t) {
         case QEvent::TouchBegin:
+            setTouchButton(nullptr);
             cancelBrightness();
             m_brightnessConsumed = false;
             // Include the margin between the viewport and the physical edge.
@@ -2096,6 +2124,7 @@ protected:
             }
             m_press.start();
             m_pressPos = p;
+            m_buttonTouchCancelled = false;
             m_moved = false;
             m_twoFinger = false;
             m_holdFired = false;
@@ -2120,6 +2149,16 @@ protected:
                 }
             }
             if (m_settingsTouch) m_settingsScrollStart = m_settingsScroll->verticalScrollBar()->value();
+            if (pts.size() == 1 && !m_activeSlider && !m_fontPicker->isVisible() && !m_actions->isVisible()) {
+                for (QWidget *hit = childAt(p); hit && hit != this; hit = hit->parentWidget()) {
+                    QPushButton *button = qobject_cast<QPushButton *>(hit);
+                    if (button) {
+                        if (button->isEnabled() && (!m_confirm->isVisible() || m_confirm->isAncestorOf(button)))
+                            setTouchButton(button);
+                        break;
+                    }
+                }
+            }
             if (pts.size() >= 2) {
                 m_twoFinger = true;
                 m_twoStartY = (mapFromGlobal(pts.at(0).screenPos().toPoint()).y()
@@ -2139,6 +2178,10 @@ protected:
             }
             break;
         case QEvent::TouchUpdate:
+            if (m_touchButton && (pts.size() != 1 || (p - m_pressPos).manhattanLength() > SWIPE_PX
+                || !m_touchButton->rect().contains(m_touchButton->mapFrom(this, p)))) {
+                m_buttonTouchCancelled = true; setTouchButton(nullptr);
+            }
             if (m_brightnessConsumed) {
                 if (pts.size() != 1) cancelBrightness();
                 else if (m_brightnessTracking) updateBrightness(p);
@@ -2197,6 +2240,9 @@ protected:
             }
             break;
         case QEvent::TouchEnd: {
+            if (m_touchButton && (pts.size() != 1 || !m_touchButton->rect().contains(m_touchButton->mapFrom(this, p))))
+                m_buttonTouchCancelled = true;
+            setTouchButton(nullptr);
             if (m_brightnessConsumed) {
                 if (m_brightnessTracking && !pts.isEmpty()) updateBrightness(p);
                 if (m_brightnessTracking) {
@@ -2222,11 +2268,12 @@ protected:
                 const QPoint delta = p - m_pressPos;
                 const int direction = pageSwipeDirection(delta.x(), delta.y(), SWIPE_PX);
                 if (direction) turnPage(direction);
-            } else if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired) tapAt(p, false);
+            } else if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired && !m_buttonTouchCancelled) tapAt(p, false);
             m_twoFinger = false;
             break;
         }
         default:              // TouchCancel
+            setTouchButton(nullptr);
             cancelBrightness(); m_brightnessConsumed = false;
             if (m_activeSlider) { m_activeSlider->cancel(); m_activeSlider = nullptr; }
             m_holdTimer.stop(); m_holdPath.clear();
@@ -2252,11 +2299,31 @@ protected:
         m_pageTimer.start(0);
     }
     void hideEvent(QHideEvent *e) override {
+        setTouchButton(nullptr);
         cancelBrightness();
         QWidget::hideEvent(e);
     }
 
 private:
+    void setTouchButton(QPushButton *button) {
+        if (m_touchButton == button) return;
+        if (m_touchButton) {
+            QPushButton *old = m_touchButton.data();
+            old->setDown(false); old->update();
+            for (QWidget *child : old->findChildren<QWidget *>()) child->update();
+            if (old->property("settingsChoice").toBool())
+                for (QLabel *label : old->findChildren<QLabel *>())
+                    label->setStyleSheet(u8("background:transparent;color:black;"));
+        }
+        m_touchButton = button;
+        if (button) {
+            button->setDown(true); button->update();
+            for (QWidget *child : button->findChildren<QWidget *>()) child->update();
+            if (button->property("settingsChoice").toBool())
+                for (QLabel *label : button->findChildren<QLabel *>())
+                    label->setStyleSheet(u8("background:transparent;color:white;"));
+        }
+    }
     void cancelBrightness() {
         if (m_brightnessTracking) {
             const bool restored = m_brightnessBackend->finish(false);
@@ -2900,6 +2967,8 @@ private:
         bl->setContentsMargins(0, 0, 0, 0);
         auto *face = new ButtonFace(I_NONE, u8(text), b);
         face->setFont(f);
+        connect(b, &QPushButton::pressed, face, [face]() { face->update(); });
+        connect(b, &QPushButton::released, face, [face]() { face->update(); });
         bl->addWidget(face);
         row->addWidget(b, stretch);
         return b;
@@ -2916,11 +2985,11 @@ private:
         b->setFocusPolicy(Qt::NoFocus);
         b->setMinimumHeight(h);
         b->setFixedWidth(w);
-        b->setStyleSheet(u8("QPushButton{border:1px solid #000000;border-radius:%1px;"
+        b->setStyleSheet(u8("QPushButton{border:%2px solid #000000;border-radius:%1px;"
                             "background-color:#FFFFFF;color:#000000;padding:0;}"
                             "QPushButton:pressed{background-color:#000000;color:#FFFFFF;}"
                             "QPushButton:disabled{border-color:#aaa;color:#aaa;}")
-                             .arg(qRound(BTN_RADIUS)));
+                             .arg(qRound(BTN_RADIUS)).arg(qMax(1, qRound(BTN_PEN))));
         b->setProperty("set_row", idx);
         b->setProperty("set_dir", dir);
         connect(b, &QPushButton::clicked, this, [this, idx, dir]() { stepSetting(idx, dir); });
@@ -2958,9 +3027,10 @@ private:
         m_settingsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         QWidget *content = new QWidget(m_settingsScroll);
         QVBoxLayout *rows = new QVBoxLayout(content);
-        rows->setContentsMargins(0, 0, 0, 0); rows->setSpacing(qMax(16, GAP * 2));
         const double sc = SCREEN_DPI / 300.0;
-        const int rowH = qMax(36, qRound(70 * sc));
+        const int controlInset = qMax(8, qRound(16 * sc));
+        rows->setContentsMargins(controlInset, 0, controlInset, 0); rows->setSpacing(qMax(16, GAP * 2));
+        const int rowH = qMax(48, qRound(80 * sc));
         for (int i = 0; i < SET_COUNT; ++i) {
             m_setLabels << static_cast<QLabel *>(nullptr);
             m_switches << static_cast<SettingSwitch *>(nullptr);
@@ -3017,9 +3087,9 @@ private:
                     r->addWidget(toggle);
                     connect(toggle, &QPushButton::clicked, this, [this, i]() { stepSetting(i, 1); });
                 } else if (isFontSizeSetting(u8(SET_ITEMS[i].key))) {
-                    const int bw = qMax(32, qRound(56 * sc));
+                    const int bw = qMax(48, qRound(72 * sc));
                     m_minusBtns[i] = makeStepButton(r, fBtn, "−", rowH, bw, i, -1);
-                    SettingSlider *slider = new SettingSlider(SET_ITEMS[i].lo, SET_ITEMS[i].hi, SET_ITEMS[i].step, line);
+                    SettingSlider *slider = new SettingSlider(SET_ITEMS[i].lo, SET_ITEMS[i].hi, SET_ITEMS[i].step, line, sc);
                     slider->setAccessibleName(u8(SET_ITEMS[i].label)); m_sliders[i] = slider;
                     slider->changed = [this, i](double value) {
                         m_setVals[i] = QString::number(value, 'f', SET_ITEMS[i].dec); refreshSettings();
@@ -3030,8 +3100,9 @@ private:
                     val = new QLabel(line); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
                     const QString range = QString::number(SET_ITEMS[i].lo, 'g', 6) + QChar(0x2013)
                                         + QString::number(SET_ITEMS[i].hi, 'g', 6);
+                    const QString suffix = QString::fromLatin1(SET_ITEMS[i].key) == u8("list_pt") ? u8(" пт") : QString();
                     const int valueWidth = qMax(QFontMetrics(fText).width(range),
-                                                QFontMetrics(fText).width(QString::number(SET_ITEMS[i].hi, 'f', SET_ITEMS[i].dec)));
+                                                QFontMetrics(fText).width(QString::number(SET_ITEMS[i].hi, 'f', SET_ITEMS[i].dec) + suffix));
                     val->setFixedWidth(qMax(rowH, valueWidth + 8)); r->addWidget(val);
                 } else if (SET_ITEMS[i].type == S_FONT || SET_ITEMS[i].type == S_OPEN) {
                     QPushButton *pick = new QPushButton(line);
@@ -3039,7 +3110,9 @@ private:
                     pick->setFocusPolicy(Qt::NoFocus); pick->setMinimumHeight(rowH);
                     pick->setFixedWidth(qMax(160, qRound(360 * sc)));
                     pick->setProperty("choiceRowHeight", rowH);
-                    pick->setStyleSheet(u8("QPushButton{border:1px solid black;background:white;}"));
+                    pick->setStyleSheet(u8("QPushButton{border:%1px solid black;background:white;color:black;}"
+                                           "QPushButton:pressed{background:black;color:white;}").arg(qMax(1, qRound(BTN_PEN))));
+                    pick->setProperty("settingsChoice", true);
                     QHBoxLayout *choiceLayout = new QHBoxLayout(pick); choiceLayout->setContentsMargins(4, 0, 4, 0);
                     val = new QLabel(pick); val->setFont(fText); val->setAlignment(Qt::AlignCenter);
                     val->setWordWrap(true); val->setMinimumWidth(0);
@@ -3053,7 +3126,9 @@ private:
                 m_setLabels[i] = val; m_switches[i] = toggle;
                 items->addWidget(line);
                 QFrame *separator = new QFrame(body); separator->setFrameShape(QFrame::HLine);
-                separator->setStyleSheet(u8("color:#b0b0b0;")); items->addWidget(separator);
+                separator->setFrameShape(QFrame::NoFrame);
+                separator->setFixedHeight(qMax(1, qRound(1.5 * sc)));
+                separator->setStyleSheet(u8("background:black;")); items->addWidget(separator);
                 m_settingRows[i] = line; m_settingLines[i] = separator;
             }
             if (group == GroupFiles) {
@@ -3113,9 +3188,10 @@ private:
         const int availableW = qMax(1, width() - 2 * margin);
         const int availableH = qMax(1, height() - 2 * margin);
         int textWidth = 0;
-        const QFontMetrics fm(m_fontPicker->font());
-        for (int i = 0; i < m_fontPicker->topLevelItemCount(); ++i)
-            textWidth = qMax(textWidth, fm.width(m_fontPicker->topLevelItem(i)->text(0)));
+        for (int i = 0; i < m_fontPicker->topLevelItemCount(); ++i) {
+            const QTreeWidgetItem *item = m_fontPicker->topLevelItem(i);
+            textWidth = qMax(textWidth, QFontMetrics(item->font(0)).width(item->text(0)));
+        }
         const int w = qMin(availableW, qMax(width() / 2, textWidth + 4 * margin));
         const int desired = m_fontPicker->topLevelItemCount() * qMax(48, BTN_HEIGHT) + 6;
         const int h = qMin(availableH, qMin(qMax(1, height() * 2 / 3), desired));
@@ -3127,39 +3203,39 @@ private:
         m_fontPickerRow = row;
         m_pickerIsBooks = false;
         m_fontPicker->clear();
-        QTreeWidgetItem *cancel = new QTreeWidgetItem(m_fontPicker);
-        cancel->setText(0, u8("Отмена")); cancel->setData(0, Qt::UserRole, -1);
-        cancel->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
         QTreeWidgetItem *current = nullptr;
         for (int n = 0; n < m_fonts.size(); ++n) {
             QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
             item->setText(0, m_fonts[n].isEmpty() ? u8("Системный") : m_fonts[n]);
             item->setData(0, Qt::UserRole, n);
+            if (!m_fonts[n].isEmpty()) {
+                QFont preview = m_fontPicker->font(); preview.setFamily(m_fonts[n]); item->setFont(0, preview);
+            }
             item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
             if (m_fonts[n].compare(m_setVals[row], Qt::CaseInsensitive) == 0) current = item;
         }
         placePicker();
         m_fontPicker->show(); m_fontPicker->raise();
-        if (current) { current->setText(0, u8("[x]  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void openBookPicker(int row) {
         if (row < 0 || row >= SET_COUNT || SET_ITEMS[row].type != S_OPEN) return;
         m_fontPickerRow = row; m_pickerIsBooks = true;
         m_fontPicker->clear();
-        const char *labels[] = { "Отмена", "Авто — только 4.38", "Всегда — на свой риск", "Никогда" };
+        const char *labels[] = { "Авто — только 4.38", "Всегда — на свой риск", "Никогда" };
         QTreeWidgetItem *current = nullptr;
         const QString value = m_setVals[row].toLower();
         const int selected = value == u8("1") ? 1 : value == u8("0") ? 2 : 0;
-        for (int n = -1; n < 3; ++n) {
+        for (int n = 0; n < 3; ++n) {
             QTreeWidgetItem *item = new QTreeWidgetItem(m_fontPicker);
-            item->setText(0, u8(labels[n + 1])); item->setData(0, Qt::UserRole, n);
+            item->setText(0, u8(labels[n])); item->setData(0, Qt::UserRole, n);
             item->setSizeHint(0, QSize(0, qMax(48, BTN_HEIGHT)));
             if (n == selected) current = item;
         }
         placePicker();
         m_fontPicker->show(); m_fontPicker->raise();
-        if (current) { current->setText(0, u8("[x]  ") + current->text(0)); m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
+        if (current) { m_fontPicker->setCurrentItem(current); m_fontPicker->scrollToItem(current); }
     }
 
     void chooseFont(QTreeWidgetItem *item) {
@@ -3203,7 +3279,9 @@ private:
         const QFontMetrics fm(face->font());
         const int desired = qMax(fm.width(u8("Сбросить общие настройки")),
                                  fm.width(u8("Сбросить настройки шрифтов"))) + 2 * BTN_MARGIN + 8;
-        const int available = qMax(1, m_settingsScroll->viewport()->width());
+        const QMargins margins = m_settingsScroll->widget() && m_settingsScroll->widget()->layout()
+            ? m_settingsScroll->widget()->layout()->contentsMargins() : QMargins();
+        const int available = qMax(1, m_settingsScroll->viewport()->width() - margins.left() - margins.right());
         const int buttonWidth = qMin(desired, available);
         m_resetTabButton->setFixedWidth(buttonWidth);
         const int textHeight = fm.boundingRect(0, 0, qMax(1, buttonWidth - 2 * BTN_MARGIN), 10000,
@@ -3218,8 +3296,9 @@ private:
         updateResetGeometry();
         for (int g = 0; g < GroupCount; ++g)
             m_groupBlocks[g]->setVisible(settingGroupTab(static_cast<SettingGroup>(g)) == tab);
-        m_generalTab->setEnabled(tab != 0); m_fontTab->setEnabled(tab != 1);
-        m_generalTab->update(); m_fontTab->update();
+        m_generalTab->setProperty("selectedTab", tab == 0); m_fontTab->setProperty("selectedTab", tab == 1);
+        for (QWidget *face : m_generalTab->findChildren<QWidget *>()) face->update();
+        for (QWidget *face : m_fontTab->findChildren<QWidget *>()) face->update();
         m_settingsScroll->verticalScrollBar()->setValue(0);
     }
 
@@ -3302,7 +3381,8 @@ private:
             if (SET_ITEMS[i].type == S_NUM) {
                 const QString key = u8(SET_ITEMS[i].key);
                 const bool autoZero = key == u8("key_font_pt") || key == u8("func_pt");
-                shown = settingNumberDisplay(v, SET_ITEMS[i].lo, SET_ITEMS[i].hi, autoZero);
+                shown = settingNumberDisplay(v, SET_ITEMS[i].lo, SET_ITEMS[i].hi, autoZero,
+                                             key == u8("list_pt") ? u8(" пт") : QString());
                 bool valid = false;
                 const double number = QString(v).replace(QLatin1Char(','), QLatin1Char('.')).toDouble(&valid);
                 if (m_sliders[i]) m_sliders[i]->setValue(valid ? number : SET_ITEMS[i].lo);
@@ -3408,6 +3488,8 @@ private:
     QPoint        m_pressPos;
     int           m_scrollStart = 0;
     bool          m_twoFinger = false, m_moved = false;
+    QPointer<QPushButton> m_touchButton;
+    bool m_buttonTouchCancelled = false;
     qreal         m_twoStartY = 0, m_twoCurrentY = 0;
     int           m_tapLog = LOG_TAPS;
     QString       m_lastMarked;
