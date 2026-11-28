@@ -20,8 +20,9 @@ the same change.
 - The existing build uses NickelTC (GCC 4.9, Qt 5.2.1, C++11). Do not use APIs
   or language features absent from that environment without a confirmed SDK
   change and compatibility verification. Do not build Qt or repair its SDK
-  inside the application. Kobalt uses prepared SDKs; migration to its Kobo Qt 5
-  SDK and CMake remains a planned task, not a property of the current build.
+  inside the application. An isolated experimental build uses Kobalt's prepared
+  kobuild Qt 5/GCC 11 SDK alongside the unchanged NickelTC build. Do not rely
+  on C++17 or change the primary toolchain until device compatibility is verified.
 - Do not assume Docker, a container socket, Qt, or a real device exists in the
   Arena environment. Network and tools vary; report what was actually tested.
 
@@ -49,6 +50,11 @@ the same change.
   sources and saves metadata alongside the package. Running `make package`
   alone does not provide these checks. Do not build Qt. `CONTAINER_ENGINE` and
   `KOBROWSE_SDK_IMAGE` are for deliberate alternative-environment testing.
+- `bash scripts/build-kobuild.sh` makes an isolated experimental Qt 5 build
+  using the pinned kobuild image in `build/kobuild/`, leaving the standard
+  outputs untouched. It validates its own package and metadata. CI compares
+  both ELF files with `scripts/compare-kobo-abi.py` and stores separate artifacts;
+  static checks cannot establish private-API or device compatibility.
 - `libkobrowse.so` is generated; do not keep it in the repository. Never present
   an old binary as a new build. Do not blindly run `make clean`: NickelHook's
   standard rules can delete `KoboRoot.tgz` in the working directory.
@@ -60,7 +66,8 @@ the same change.
   was actually checked.
 - `.github/workflows/kobo-test.yml` fetches the submodule, runs tests, builds and
   verifies the package, and stores it with metadata in the
-  `kobrowse-kobo-qt5-test` artifact. The user does not need Docker or NickelTC
+  `kobrowse-kobo-qt5-test` artifact, plus `kobrowse-kobuild-qt5-experimental`
+  with its ABI report. The user does not need Docker or NickelTC
   on their computer; the GitHub runner uses Docker. Do not promise a successful
   build before verifying the specific run. The artifact is a test build, not a
   published release.

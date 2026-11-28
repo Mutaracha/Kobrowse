@@ -24,12 +24,16 @@ class BuildTest(unittest.TestCase):
         self.root = temp / 'repo'
         self.root.mkdir()
         (self.root / 'scripts').mkdir()
-        for name in ('build-kobo.sh', 'check-package.py', 'write-build-info.py'):
+        for name in ('build-kobo.sh', 'build-kobuild.sh', 'check-package.py', 'write-build-info.py'):
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         (self.root / '.gitignore').write_text('/build/\n/libkobrowse.so\n')
         hook = self.root / 'NickelHook'
         hook.mkdir()
         (hook / 'NickelHook.mk').write_text('# test fixture\n')
+        for directory in ('src', 'res'):
+            (self.root / directory).mkdir()
+            (self.root / directory / 'fixture').write_text('fixture')
+        (self.root / 'Makefile').write_text('# fixture\n')
         self.git(hook, 'init', '-q')
         self.git(hook, 'add', '.')
         self.commit(hook)
@@ -57,8 +61,11 @@ class BuildTest(unittest.TestCase):
 import json, os, pathlib, shutil, sys
 if sys.argv[1] == 'run':
     if os.environ.get('FAKE_FAIL'): sys.exit(1)
-    shutil.copyfile(os.environ['FAKE_PLUGIN'], 'libkobrowse.so')
-    shutil.copyfile(os.environ['FAKE_PACKAGE'], 'build/KoboRoot.tgz')
+    mount = sys.argv[sys.argv.index('-v') + 1].rsplit(':', 1)[0]
+    work = pathlib.Path(mount)
+    (work / 'build').mkdir(exist_ok=True)
+    shutil.copyfile(os.environ['FAKE_PLUGIN'], work / 'libkobrowse.so')
+    shutil.copyfile(os.environ['FAKE_PACKAGE'], work / 'build/KoboRoot.tgz')
 elif sys.argv[1:3] == ['image', 'inspect']:
     print(json.dumps([{'Id': os.environ['FAKE_IMAGE_ID'], 'RepoDigests': [os.environ['FAKE_IMAGE']]}]))
 else:
@@ -96,6 +103,29 @@ else:
         self.assertNotEqual(result.returncode, 0)
         for path in ('libkobrowse.so', 'build/KoboRoot.tgz', 'build/build-info.json'):
             self.assertFalse((self.root / path).exists(), path)
+
+    def test_kobuild_is_isolated_and_failure_removes_experimental_outputs(self):
+        self.assertEqual(self.run_build().returncode, 0)
+        baseline = (self.root / 'build/KoboRoot.tgz').read_bytes()
+        env = dict(self.env, KOBROWSE_KOBUILD_IMAGE=IMAGE)
+        result = subprocess.run(['bash', 'scripts/build-kobuild.sh'], cwd=self.root, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        info = json.loads((self.root / 'build/kobuild/build-info.json').read_text())
+        self.assertEqual(info['sdk']['reference'], IMAGE)
+        self.assertEqual(info['build_number'], 'local-kobuild')
+        self.assertEqual(info['files']['KoboRoot.tgz']['sha256'], hashlib.sha256(self.package.read_bytes()).hexdigest())
+        self.assertEqual((self.root / 'build/KoboRoot.tgz').read_bytes(), baseline)
+        self.assertEqual((self.root / 'libkobrowse.so').read_bytes(), ARM_SO)
+        self.assertFalse(list((self.root / 'build').glob('kobuild-work.*')))
+        env['FAKE_FAIL'] = '1'
+        result = subprocess.run(['bash', 'scripts/build-kobuild.sh'], cwd=self.root, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        for name in ('KoboRoot.tgz', 'libkobrowse.so', 'build-info.json'):
+            self.assertFalse((self.root / 'build/kobuild' / name).exists())
+        self.assertEqual((self.root / 'build/KoboRoot.tgz').read_bytes(), baseline)
+        self.assertFalse(list((self.root / 'build').glob('kobuild-work.*')))
 
     def test_mismatched_package_image_or_dirty_tree_cannot_produce_metadata(self):
         self.plugin.write_bytes(ARM_SO + b'other')

@@ -25,7 +25,9 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def build_info(image, inspection, require_clean=False):
+def build_info(image, inspection, require_clean=False, package_path=None, plugin_path=None):
+    package_path = pathlib.Path(package_path) if package_path else ROOT / 'build/KoboRoot.tgz'
+    plugin_path = pathlib.Path(plugin_path) if plugin_path else ROOT / 'libkobrowse.so'
     if not isinstance(inspection, list) or len(inspection) != 1 or not isinstance(inspection[0], dict):
         raise ValueError('expected one inspected SDK image')
     detail = inspection[0]
@@ -55,16 +57,17 @@ def build_info(image, inspection, require_clean=False):
         'source': {'commit': revision, 'dirty': dirty, 'status': status.splitlines(),
                    'nickelhook_commit': hook_revision, 'nickelhook_status': hook_status.splitlines()},
         'sdk': {'reference': image, 'image_id': image_id, 'repo_digests': sorted(repo_digests)},
-        'files': {'KoboRoot.tgz': {'sha256': sha256(ROOT / 'build/KoboRoot.tgz')},
-                  'libkobrowse.so': {'sha256': sha256(ROOT / 'libkobrowse.so')}},
+        'files': {'KoboRoot.tgz': {'sha256': sha256(package_path)},
+                  'libkobrowse.so': {'sha256': sha256(plugin_path)}},
     }
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise ValueError('usage: write-build-info.py SDK_REFERENCE INSPECT_JSON')
-    info = build_info(sys.argv[1], json.loads(sys.argv[2]), os.environ.get('KOBROWSE_REQUIRE_CLEAN') == '1')
-    path = ROOT / 'build/build-info.json'
+    if len(sys.argv) not in (3, 6):
+        raise ValueError('usage: write-build-info.py SDK_REFERENCE INSPECT_JSON [PACKAGE PLUGIN OUTPUT]')
+    package, plugin, output = (sys.argv[3:6] if len(sys.argv) == 6 else (None, None, None))
+    info = build_info(sys.argv[1], json.loads(sys.argv[2]), os.environ.get('KOBROWSE_REQUIRE_CLEAN') == '1', package, plugin)
+    path = pathlib.Path(output) if output else ROOT / 'build/build-info.json'
     path.write_text(json.dumps(info, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     print('Build metadata:', path)
     print('SDK:', ', '.join(info['sdk']['repo_digests']) or info['sdk']['image_id'])
