@@ -135,6 +135,8 @@ class SettingsUiTest {
         require(w.m_countLabel->height() >= QFontMetrics(w.m_countLabel->font()).lineSpacing() * 2,
                 "footer counters have room for both lines");
         require(w.m_prev->geometry().center().y() == w.m_next->geometry().center().y(), "page controls aligned");
+        require(w.m_pageLabel->geometry().right() < w.m_prev->geometry().left()
+                && w.m_prev->geometry().right() < w.m_next->geometry().left(), "page counter precedes navigation buttons");
         const int pageX = w.m_pageLabel->x(), pageWidth = w.m_pageLabel->width();
         const int countX = w.m_countLabel->x(), countWidth = w.m_countLabel->width();
         w.m_pageIndex = 9; w.m_fileCount = 999; w.m_dirCount = 99;
@@ -175,6 +177,80 @@ class SettingsUiTest {
         touch(w, QEvent::TouchUpdate, point, 2);
         require(!button->isDown(), "second finger clears pressed feedback");
         touch(w, QEvent::TouchCancel, point, 0);
+    }
+    static void testSelection(KobrowseWindow &w) {
+        const QString first = w.m_root + "/selection-fixture-one.txt";
+        const QString second = w.m_root + "/selection-fixture-two.txt";
+        QFile a(first), b(second);
+        require(a.open(QIODevice::WriteOnly), "first selection fixture"); a.close();
+        require(b.open(QIODevice::WriteOnly), "second selection fixture"); b.close();
+        w.load(); QApplication::processEvents();
+        QTreeWidgetItem *firstItem = nullptr, *secondItem = nullptr, *protectedItem = nullptr;
+        for (int i = 0; i < w.m_list->topLevelItemCount(); ++i) {
+            QTreeWidgetItem *item = w.m_list->topLevelItem(i);
+            const QString path = item->data(0, ROLE_PATH).toString();
+            if (path == first) firstItem = item;
+            else if (path == second) secondItem = item;
+            else if (path == w.m_root + "/.adds") protectedItem = item;
+        }
+        require(firstItem && secondItem && protectedItem, "selection fixtures and protected entry exist");
+        QLabel *center = w.m_deviceStatus->findChild<QLabel *>("statusBuild");
+        QLabel *free = w.m_deviceStatus->findChild<QLabel *>("statusFree");
+        w.m_menuRequested = true; w.toggleMark(firstItem);
+        require(w.m_marked.contains(first) && w.m_actions->isVisible()
+                && center->text() == QString::fromUtf8("Выделено: 1") && free->isHidden(), "selection count replaces build and free space");
+        const QRect protectedRect = w.m_list->visualItemRect(protectedItem);
+        require(!protectedRect.isEmpty(), "protected row is on current page");
+        const QPoint protectedTap = w.m_list->viewport()->mapTo(&w, QPoint(8, protectedRect.center().y()));
+        w.tapAt(protectedTap, false);
+        require(w.m_marked.size() == 1 && w.m_marked.contains(first) && !w.m_marked.contains(w.m_root + "/.adds")
+                && firstItem->data(0, ROLE_MARK).toBool() && !protectedItem->data(0, ROLE_MARK).toBool()
+                && w.m_menuRequested && w.m_actions->isVisible(), "protected tap leaves previous selection and menu intact");
+        w.toggleMark(secondItem);
+        require(w.m_marked.size() == 2 && center->text() == QString::fromUtf8("Выделено: 2"), "multiple selection count updated");
+        w.m_deviceStatus->refresh();
+        require(center->text() == QString::fromUtf8("Выделено: 2") && free->isHidden(), "refresh retains selection indicator");
+        w.m_deviceStatus->showBrightness(55);
+        require(center->text() == QString::fromUtf8("Яркость: 55%"), "brightness notice takes temporary priority");
+        w.m_deviceStatus->clearBrightness();
+        require(center->text() == QString::fromUtf8("Выделено: 2") && free->isHidden(), "selection count returns after brightness notice");
+        w.toggleMark(secondItem);
+        require(center->text() == QString::fromUtf8("Выделено: 1"), "deselection updates count");
+        w.clearSelection();
+        require(center->text().contains("local") && !free->isHidden(), "clearing selection restores build and free space");
+        QFile::remove(first); QFile::remove(second); w.load();
+    }
+    static void testBookOpening(KobrowseWindow &w) {
+        require(bookOpenAllowedFor("0", "x,x,4.38.23828") == false
+                && bookOpenAllowedFor("1", "")
+                && bookOpenAllowedFor("auto", "x,x,4.38.23828")
+                && !bookOpenAllowedFor("auto", "x,x,4.39.0")
+                && !bookOpenAllowedFor("auto", "") && !bookOpenAllowedFor("bogus", "x,x,4.38.23828"),
+                "never, always, auto and invalid policies are fail-safe");
+        const QString filePath = w.m_root + "/book-policy-fixture.epub";
+        QFile file(filePath); require(file.open(QIODevice::WriteOnly), "book policy fixture"); file.close();
+        int calls = 0;
+        testBookOpener = [&calls](const QString &, bool, QString &err) { ++calls; err = QString::fromUtf8("Тестовая ошибка"); return false; };
+        w.showSettings(false); QApplication::processEvents(); loadConfig();
+        require(OPEN_BOOKS == "0", "never mode persists after leaving settings and reload");
+        QTreeWidgetItem item; item.setData(0, ROLE_PATH, filePath); item.setData(0, ROLE_DIR, false);
+        w.onItem(&item);
+        require(calls == 0 && w.isVisible() && w.m_footerNotice->text().contains(QString::fromUtf8("выключено")),
+                "never blocks direct file click before opening backend");
+        QString error;
+        require(!openBook(filePath, true, error) && calls == 0 && error.contains(QString::fromUtf8("выключено")),
+                "central open gateway cannot bypass never");
+        SearchWindow *search = new SearchWindow(&w); search->resize(768, 1024); search->show(); QApplication::processEvents();
+        search->m_paths << filePath;
+        QTreeWidgetItem *result = new QTreeWidgetItem(search->m_list, QStringList() << "book-policy-fixture");
+        search->openResult(result);
+        require(calls == 0 && search->isVisible() && search->m_msg->text().contains(QString::fromUtf8("выключено")),
+                "never blocks search result before opening backend");
+        OPEN_BOOKS = "1";
+        w.onItem(&item); require(calls == 1 && w.isVisible(), "always reaches direct opening backend");
+        search->openResult(result); require(calls == 2 && search->isVisible(), "always reaches search opening backend");
+        delete search; testBookOpener = std::function<bool(const QString &, bool, QString &)>();
+        QFile::remove(filePath); loadConfig(); w.showSettings(true); QApplication::processEvents();
     }
     static void testExtractAndLogging(KobrowseWindow &w) {
         const QString source = w.m_root + "/fixture-book.txt";
@@ -428,6 +504,7 @@ public:
             "protected current directory does not offer create folder");
         w.m_path = w.m_root;
         w.m_clip.clear(); w.clearSelection();
+        testSelection(w);
         testBrightness(w);
         testExtractAndLogging(w);
         w.openTrash(); QApplication::processEvents();
@@ -547,6 +624,7 @@ public:
             require(OPEN_BOOKS == modes[n] && w.m_bookModes[n]->isSelected(), "book mode applies immediately");
             require(!w.m_pickerShade->isVisible() && !w.m_confirm->isVisible(), "book choice opens no popup");
         }
+        testBookOpening(w);
         w.setSettingsTab(1); QApplication::processEvents();
         require(w.m_settingsScroll->horizontalScrollBar()->maximum() == 0, "font tab fits screen");
         require(w.m_fontChoices.size() == w.m_fonts.size() && !w.m_fontChoices.isEmpty(), "inline font list contains all choices");

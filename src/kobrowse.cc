@@ -910,17 +910,38 @@ template <typename T> static T nsym(const char *n) { return reinterpret_cast<T>(
 
 // Можно ли открывать книги на этой прошивке. Вызовы libnickel проверены только на 4.38: на другой версии
 // функции с теми же именами могут вести себя иначе, поэтому по умолчанию (auto) там открытие выключено.
-static bool bookOpenAllowed() {
-    if (OPEN_BOOKS == u8("1")) return true;
-    if (OPEN_BOOKS == u8("0")) return false;
-    QFile f(u8("/mnt/onboard/.kobo/version"));   // «серийный,3.0.35+,4.38.23852,…»
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    const QStringList parts = QString::fromLatin1(f.readAll()).trimmed().split(QLatin1Char(','));
-    f.close();
+static bool bookOpenAllowedFor(const QString &mode, const QString &version) {
+    if (mode == u8("1")) return true;
+    if (mode == u8("0")) return false;
+    if (mode != u8("auto") && !mode.isEmpty()) return false;
+    const QStringList parts = version.trimmed().split(QLatin1Char(','));
     return parts.size() > 2 && parts.at(2).startsWith(u8("4.38."));
 }
-
+static bool bookOpenAllowed() {
+    if (OPEN_BOOKS == u8("1") || OPEN_BOOKS == u8("0")) return bookOpenAllowedFor(OPEN_BOOKS, QString());
+    QFile f(u8("/mnt/onboard/.kobo/version"));
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    return bookOpenAllowedFor(OPEN_BOOKS, QString::fromLatin1(f.readAll()));
+}
+static QString bookOpenDenial() {
+    if (bookOpenAllowed()) return QString();
+    return OPEN_BOOKS == u8("0")
+        ? u8("Открытие книг выключено (open_books=0 в kobrowse.ini)")
+        : u8("Открытие книг проверено только на прошивке 4.38. Включить на свой риск: open_books=1 в .adds/kobrowse/kobrowse.ini");
+}
+#ifdef KOBROWSE_SETTINGS_TEST
+static std::function<bool(const QString &, bool, QString &)> testBookOpener;
+#endif
 static bool openBook(const QString &path, bool viaKobalt, QString &err) {
+    // Enforce policy at the single gateway too, before looking up any private API.
+    err = bookOpenDenial();
+    if (!err.isEmpty()) return false;
+    if (!safeLocalPath(u8(KOBROWSE_ROOT), path) || !QFileInfo(path).isFile()) {
+        err = u8("Ссылка или файл вне накопителя недоступен"); return false;
+    }
+#ifdef KOBROWSE_SETTINGS_TEST
+    if (testBookOpener) return testBookOpener(path, viaKobalt, err);
+#endif
     auto getCur  = nsym<void *(*)()>("_ZN6Device16getCurrentDeviceEv");
     auto getDb   = nsym<const QString &(*)(void *)>("_ZNK6Device9getDbNameEv");
     auto getById = nsym<void (*)(void *, const QString &, const QString &)>("_ZN13VolumeManager7getByIdERK7QStringS2_");
@@ -1878,6 +1899,8 @@ private:
         const int row = m_list->indexOfTopLevelItem(it);
         if (row < 0 || row >= m_paths.size()) return;
         if (!safeLocalPath(u8(KOBROWSE_ROOT), m_paths.at(row))) { showMsg(u8("Ссылка недоступна")); return; }
+        const QString denial = bookOpenDenial();
+        if (!denial.isEmpty()) { showMsg(denial); return; }
         hide();
         QString err;
         if (openBook(m_paths.at(row), true, err)) close();
@@ -2414,11 +2437,11 @@ public:
         const int footerHeight = qMax(chromeHeight, QFontMetrics(footerFont).lineSpacing() * 2);
         m_prev->setFixedSize(chromeHeight, chromeHeight); m_next->setFixedSize(chromeHeight, chromeHeight);
         m_prev->setLargePlainIcon(true); m_next->setLargePlainIcon(true);
-        footer->addWidget(m_prev, 0, Qt::AlignVCenter); footer->addWidget(m_next, 0, Qt::AlignVCenter);
         m_pageLabel = new QLabel(m_nav);
         m_pageLabel->setFont(footerFont);
         m_pageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         footer->addWidget(m_pageLabel);
+        footer->addWidget(m_prev, 0, Qt::AlignVCenter); footer->addWidget(m_next, 0, Qt::AlignVCenter);
         m_footerNotice = new FooterNotice(m_nav); m_footerNotice->setFont(fMsg);
         m_footerNotice->setFixedHeight(footerHeight);
         footer->addWidget(m_footerNotice, 1);
@@ -2865,7 +2888,7 @@ private:
         const QString path = it->data(0, ROLE_PATH).toString();
         if (path.isEmpty()) return;
         if (readOnlyLocalEntry(m_root, m_trash, path, ALLOW_ADDS)) {
-            clearSelection();
+            if (m_marked.isEmpty()) m_menuRequested = false;
             showMessage(u8("Защищённые элементы доступны только для просмотра"));
             return;
         }
@@ -2882,6 +2905,7 @@ private:
     void clearSelection() {
         m_marked.clear(); m_selectionOrder.clear();
         m_menuRequested = false;
+        if (m_deviceStatus) m_deviceStatus->setSelectionCount(0);
         if (m_actions) m_actions->hide();
         if (m_info) m_info->hide();
         for (int i = 0; i < m_list->topLevelItemCount(); ++i) setMarkedLook(m_list->topLevelItem(i), false);
@@ -2904,6 +2928,7 @@ private:
         if (m_actions->geometry() != geometry) m_actions->setGeometry(geometry);
     }
     void updateActions() {
+        m_deviceStatus->setSelectionCount(m_marked.size());
         m_info->hide();
         const bool show = m_menuRequested && !m_settings->isVisible() && !m_confirm->isVisible();
         if (!show) { if (m_actions->isVisible()) m_actions->hide(); return; }
@@ -3412,12 +3437,8 @@ private:
     // Открыть книгу. Окно менеджера сначала прячется (иначе останется поверх читалки);
     // при ошибке показывается снова с сообщением, при успехе — закрывается.
     void openFile(const QString &path) {
-        if (!bookOpenAllowed()) {
-            showMessage(OPEN_BOOKS == u8("0")
-                ? u8("Открытие книг выключено (open_books=0 в kobrowse.ini)")
-                : u8("Открытие книг проверено только на прошивке 4.38. Включить на свой риск: open_books=1 в .adds/kobrowse/kobrowse.ini"));
-            return;
-        }
+        const QString denial = bookOpenDenial();
+        if (!denial.isEmpty()) { showMessage(denial); return; }
         hide();
         QString err;
         if (openBook(path, true, err)) {
@@ -3764,6 +3785,7 @@ private:
         if (on) {
             if (m_menuRequested) {
                 m_marked.clear(); m_selectionOrder.clear();
+                m_deviceStatus->setSelectionCount(0);
                 for (int i = 0; i < m_list->topLevelItemCount(); ++i)
                     setMarkedLook(m_list->topLevelItem(i), false);
                 m_list->viewport()->update();

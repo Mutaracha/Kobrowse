@@ -81,13 +81,18 @@ public:
         connect(&brightnessTimer, &QTimer::timeout, this, [this]() { clearBrightness(); });
     }
     void showBrightness(int percent) {
-        brightnessTimer.stop();
-        m_build->setText(QString::fromUtf8("Яркость: %1%").arg(percent));
+        brightnessTimer.stop(); brightnessActive = true; brightnessPercent = percent;
+        updateCenter();
+    }
+    void setSelectionCount(int count) {
+        count = qMax(0, count);
+        if (selectionCount == count) return;
+        selectionCount = count; updateCenter();
     }
     void hideBrightnessSoon() { brightnessTimer.start(1500); }
     void clearBrightness() {
-        brightnessTimer.stop();
-        m_build->setText(QString::fromLatin1("#%1 %2").arg(QLatin1String(KOBROWSE_BUILD_NUMBER), QLatin1String(KOBROWSE_BUILD_COMMIT)));
+        brightnessTimer.stop(); brightnessActive = false;
+        updateCenter();
     }
     void setStatusFont(const QFont &font) {
         setFont(font);
@@ -126,6 +131,15 @@ public:
         if (m_free->text() != freeText) m_free->setText(freeText);
     }
 private:
+    void updateCenter() {
+        const QString text = brightnessActive ? QString::fromUtf8("Яркость: %1%").arg(brightnessPercent)
+            : selectionCount ? QString::fromUtf8("Выделено: %1").arg(selectionCount)
+            : QString::fromLatin1("#%1 %2").arg(QLatin1String(KOBROWSE_BUILD_NUMBER), QLatin1String(KOBROWSE_BUILD_COMMIT));
+        if (m_build->text() != text) m_build->setText(text);
+        m_free->setVisible(selectionCount == 0);
+    }
+    int selectionCount = 0, brightnessPercent = 0;
+    bool brightnessActive = false;
     QString powerDirectory, storageDirectory;
     QLabel *m_clock = nullptr, *m_build = nullptr, *m_free = nullptr, *m_battery = nullptr;
     BatteryIcon *m_icon = nullptr;
