@@ -75,7 +75,7 @@ else:
         self.env = dict(os.environ, CONTAINER_ENGINE=str(self.engine), KOBROWSE_SDK_IMAGE=IMAGE,
                         FAKE_PLUGIN=str(self.plugin), FAKE_PACKAGE=str(self.package),
                         FAKE_IMAGE_ID=IMAGE_ID, FAKE_IMAGE=IMAGE, KOBROWSE_REQUIRE_CLEAN='1',
-                        GITHUB_SHA=self.revision)
+                        GITHUB_SHA=self.revision, GITHUB_RUN_NUMBER='123')
 
     @staticmethod
     def git(path, *args):
@@ -113,7 +113,7 @@ else:
         self.assertEqual(result.returncode, 0, result.stderr)
         info = json.loads((self.root / 'build/kobuild/build-info.json').read_text())
         self.assertEqual(info['sdk']['reference'], IMAGE)
-        self.assertEqual(info['build_number'], 'local-kobuild')
+        self.assertEqual(info['build_number'], '123-kobuild')
         self.assertEqual(info['files']['KoboRoot.tgz']['sha256'], hashlib.sha256(self.package.read_bytes()).hexdigest())
         self.assertEqual((self.root / 'build/KoboRoot.tgz').read_bytes(), baseline)
         self.assertEqual((self.root / 'libkobrowse.so').read_bytes(), ARM_SO)

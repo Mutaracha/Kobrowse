@@ -57,7 +57,13 @@ jobs:
           fi
           cat build/zip-test.log
       - name: Test package checks
-        run: python3 -m unittest discover -s tests -v
+        run: |
+          if ! python3 -m unittest discover -s tests -v > build/package-test.log 2>&1; then
+            cat build/package-test.log
+            tail -n 20 build/package-test.log | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/package-test.log
       - name: Build and verify Qt 5 test package
         env:
           KOBROWSE_REQUIRE_CLEAN: '1'
@@ -68,6 +74,13 @@ jobs:
             exit 1
           fi
           cat build/cross-build.log
+      - uses: actions/upload-artifact@v7
+        with:
+          name: kobrowse-kobo-qt5-test
+          path: |
+            build/KoboRoot.tgz
+            build/build-info.json
+          if-no-files-found: error
       - name: Build experimental kobuild Qt 5 package
         env:
           KOBROWSE_REQUIRE_CLEAN: '1'
@@ -93,11 +106,4 @@ jobs:
             build/kobuild/KoboRoot.tgz
             build/kobuild/build-info.json
             build/kobuild/abi-report.txt
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: kobrowse-kobo-qt5-test
-          path: |
-            build/KoboRoot.tgz
-            build/build-info.json
           if-no-files-found: error
