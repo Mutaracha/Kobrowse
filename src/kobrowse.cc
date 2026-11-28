@@ -25,7 +25,6 @@
 #include <QInputMethod>
 #include <QHash>
 #include <QScreen>
-#include <QSignalMapper>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -63,6 +62,7 @@
 
 #include "path_label.h"
 #include "sleep_policy.h"
+#include "sleep_lifecycle.h"
 #include "file_policy.h"
 #include "file_mutations.h"
 #include "zip_writer.h"
@@ -4040,75 +4040,20 @@ static QPointer<KobrowseWindow> g_win;          // одно окно на всё
 static QFileSystemWatcher  *g_watch = nullptr;
 static QTimer              *g_poll = nullptr;  // страховка: inotify на /tmp иногда молчит
 
-// Kobalt listens to PlugManager::plugged and N3PowerWorkflowManager::aboutToSleep.
-// Do not hook the same power/USB PLT entries: NickelHook replaces, rather than chains,
-// another plugin's hook (notably Kobalt's shutdown save/drain).
+// Signals and read-only queries do not replace Kobalt's NickelHook entries.
 static QTimer *g_lifecycleClose = nullptr;
-static QTimer *g_sleepRetry = nullptr;
-static QPointer<QObject> g_sleepManager;
+static SleepLifecycle *g_sleepLifecycle = nullptr;
 static QPointer<QObject> g_plugManager;
 
-// The same optional queries used by Kobalt: do not raise an overlay while
-// Nickel's sleep, PIN, or USB view is still visible. Missing APIs fail closed.
-static bool nativeWakeReady() {
-    typedef const void *(*Manager)();
-    typedef bool (*Query)(const void *);
-    const Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
-    const Query sleeping = nsym<Query>("_ZNK22N3PowerWorkflowManager8sleepingEv");
-    const Query visible = nsym<Query>("_ZNK22N3PowerWorkflowManager16sleepViewVisibleEv");
-    const Query pin = nsym<Query>("_ZNK22N3PowerWorkflowManager25pinCodeInputDialogVisibleEv");
-    const Manager usb = nsym<Manager>("_ZN19PlugWorkflowManager14sharedInstanceEv");
-    const Query usbVisible = nsym<Query>("_ZN19PlugWorkflowManager20pluggedInViewVisibleEv");
-    if (!power || !sleeping || !visible || !pin || !usb || !usbVisible) return false;
-    const void *p = power(), *u = usb();
-    return p && u && sleepRecoveryAllowed(true, sleeping(p), visible(p), pin(p), usbVisible(u));
-}
-static void restoreAfterSleep() {
-    if (!g_win && !g_search) { g_sleepRetry->stop(); return; }
-    if (!nativeWakeReady()) return;
-    g_sleepRetry->stop();
-    const bool restoreSearch = g_search && g_search->property("kobrowseSleepHidden").toBool();
-    if (restoreSearch) {
-        g_search->setProperty("kobrowseSleepHidden", false); g_search->show(); g_search->raise();
-    }
-    if (g_win && g_win->property("kobrowseSleepHidden").toBool()) {
-        g_win->setProperty("kobrowseSleepHidden", false); g_win->show();
-        if (restoreSearch && g_win->parentWidget() == g_search->parentWidget()) g_win->stackUnder(g_search);
-        else g_win->raise();
-        g_win->resumeDeferredWork();
-    }
-    klog(u8("sleep: restored after native views closed"));
-}
 static void attachSleepWindow(QWidget *window) {
-    typedef QObject *(*Manager)();
-    const Manager power = nsym<Manager>("_ZN22N3PowerWorkflowManager14sharedInstanceEv");
-    QObject *manager = power ? power() : nullptr;
-    // If the wake queries are missing, do not hide the only visible window.
-    if (!manager || !g_sleepRetry || !nsym<void *>("_ZNK22N3PowerWorkflowManager8sleepingEv")
-        || !nsym<void *>("_ZNK22N3PowerWorkflowManager16sleepViewVisibleEv")
-        || !nsym<void *>("_ZNK22N3PowerWorkflowManager25pinCodeInputDialogVisibleEv")
-        || !nsym<void *>("_ZN19PlugWorkflowManager14sharedInstanceEv")
-        || !nsym<void *>("_ZN19PlugWorkflowManager20pluggedInViewVisibleEv")) {
-        klog(u8("sleep: native queries unavailable")); return;
-    }
-    if (g_sleepManager != manager) {
-        if (g_sleepManager) QObject::disconnect(g_sleepManager, nullptr, g_sleepRetry, nullptr);
-        g_sleepManager = manager;
-        const bool resumed = QObject::connect(manager, SIGNAL(resumedFromSleep()), g_sleepRetry, SLOT(start()), Qt::DirectConnection);
-        QObject::connect(manager, SIGNAL(resumingFromSleep()), g_sleepRetry, SLOT(start()), Qt::DirectConnection);
-        QObject::connect(manager, SIGNAL(aboutToSleep()), g_sleepRetry, SLOT(stop()), Qt::DirectConnection);
-        if (!resumed) { g_sleepManager.clear(); klog(u8("sleep: resume signal unavailable")); return; }
-    }
-    // Map the old-style runtime signal to a lambda without adding a moc build.
-    // Track only windows which were visible when sleep actually started.
-    QSignalMapper *mapper = new QSignalMapper(window);
-    mapper->setMapping(manager, window);
-    QObject::connect(mapper, static_cast<void (QSignalMapper::*)(QWidget *)>(&QSignalMapper::mapped),
-                     window, [window](QWidget *) {
-        if (window->isVisible()) { window->setProperty("kobrowseSleepHidden", true); window->hide(); }
-    });
-    const bool ok = QObject::connect(manager, SIGNAL(aboutToSleep()), mapper, SLOT(map()), Qt::DirectConnection);
-    klog(ok ? u8("sleep: hide and restore connected") : u8("sleep: signal unavailable"));
+    if (!g_sleepLifecycle || !window) return;
+    QObject *manager = nativePowerManager();
+    const bool connected = g_sleepLifecycle->bind(manager);
+    if (window == g_win.data()) {
+        QPointer<KobrowseWindow> guarded = g_win;
+        g_sleepLifecycle->attach(window, 0, [guarded]() { if (guarded) guarded->resumeDeferredWork(); });
+    } else g_sleepLifecycle->attach(window, 1);
+    klog(connected ? u8("sleep: lifecycle connected") : u8("sleep: lifecycle signals or native queries unavailable"));
 }
 static void closeForLifecycle() {
     if (g_search || g_win) klog(u8("USB lifecycle: closing windows"));
@@ -4312,6 +4257,10 @@ static void kobrowse_font_diag() {
 // на Clara inotify на /tmp иногда не приходит после долгого сна — пункт молчал.
 static void checkKobrowseTriggers() {
     setupLifecycleSignals();
+    if (g_sleepLifecycle && (g_win || g_search)) {
+        if (!g_sleepLifecycle->connected()) g_sleepLifecycle->bind(nativePowerManager());
+        g_sleepLifecycle->poll();
+    }
     if (QFile::exists(u8(KOBROWSE_TRIGGER))) { QFile::remove(u8(KOBROWSE_TRIGGER)); kobrowse_open(); }
     if (QFile::exists(u8(KSEARCH_TRIGGER))) { QFile::remove(u8(KSEARCH_TRIGGER)); ksearch_open(); }
     if (QFile::exists(u8(KOBROWSE_DIAG))) {
@@ -4359,9 +4308,8 @@ static int kobrowse_init() {
         nh_log("uninstall requested; waiting for library failsafe");
         return 0;
     }
-    g_sleepRetry = new QTimer(QCoreApplication::instance());
-    g_sleepRetry->setInterval(25);
-    QObject::connect(g_sleepRetry, &QTimer::timeout, []() { restoreAfterSleep(); });
+    g_sleepLifecycle = new SleepLifecycle(queryNativeSleepView, QCoreApplication::instance());
+    g_sleepLifecycle->didRestore = []() { klog(u8("sleep: restored after native views closed")); };
     g_lifecycleClose = new QTimer();
     g_lifecycleClose->setSingleShot(true); g_lifecycleClose->setInterval(0);
     QObject::connect(g_lifecycleClose, &QTimer::timeout, []() { closeForLifecycle(); });

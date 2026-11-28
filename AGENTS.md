@@ -47,9 +47,10 @@ the same change.
   builds this SDK only. `CONTAINER_ENGINE` and `KOBROWSE_SDK_IMAGE` permit
   deliberate alternative-environment testing. Never run `make package` alone
   and present it as a verified build. Do not build Qt.
-- Run `bash tests/run-native-keyboard-tests.sh` with Qt 5 for mock Nickel
-  keyboard lifecycle and failure cases. Mock tests and ELF inspection cannot
-  establish ABI or device compatibility.
+- Run `bash tests/run-native-keyboard-tests.sh` and
+  `bash tests/run-sleep-lifecycle-tests.sh` with Qt 5 for isolated mock Nickel
+  keyboard and sleep lifecycle tests. These and ELF inspection cannot establish
+  ABI, e-ink handoff or device compatibility; see `doc/sleep-lifecycle.md`.
 - `libkobrowse.so` is generated; do not keep it in the repository. Never present
   an old binary as a new build. Do not blindly run `make clean`: NickelHook's
   standard rules can delete `KoboRoot.tgz` in the working directory.
