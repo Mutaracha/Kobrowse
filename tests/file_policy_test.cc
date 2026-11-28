@@ -299,6 +299,13 @@ int main(int argc, char **argv) {
     require(moveLocalEntry(root, root + "/to-move", root + "/moved", moveError), "normal move");
     require(moveLocalEntry(root, root + "/moved", trash + "/moved", moveError, true), "normal move to trash");
     require(QFileInfo(trash + "/moved").exists(), "trash move retained data");
+    writeFile(root + "/collision", "existing");
+    require(!moveLocalEntry(root, trash + "/moved", root + "/collision", moveError), "trash move cannot overwrite");
+    require(!moveLocalEntry(root, trash + "/moved", root + "/.kobo/restored", moveError), "trash move cannot target protected folder");
+    require(QFileInfo(trash + "/moved").exists(), "failed trash moves keep source");
+    require(moveLocalEntry(root, trash + "/moved", root + "/restored", moveError), "move trash contents to normal folder");
+    require(QFileInfo(root + "/restored").exists() && !QFileInfo(trash + "/moved").exists(), "restored move preserves data");
+    require(!moveLocalEntry(root, trash + "/nested/link", root + "/bad-link", moveError), "trash symlink cannot be moved");
     const QString spareRoot = tmp.path() + "/spare-root";
     require(QDir().mkpath(spareRoot), "spare root");
     writeFile(spareRoot + "/user", "keep");

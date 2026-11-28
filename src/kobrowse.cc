@@ -2235,11 +2235,11 @@ public:
         QFont pathFont = statusFont;
         const QString pathFamily = defaultListFont();
         if (!pathFamily.isEmpty()) pathFont.setFamily(pathFamily);
-        pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1)));
+        pathFont.setPixelSize(qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1) - ptToPx(0.5)));
         m_pathLabel->setFont(pathFont);
         m_pathLabel->setWordWrap(false);
         m_pathLabel->setTextFormat(Qt::PlainText);
-        m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:6px;"));
+        m_pathLabel->setStyleSheet(u8("border:1px solid black;padding:5px 6px;"));
         pathAndHeader->addWidget(m_pathLabel);
 
         // Fully tappable labelled columns, with the active direction on the left.
@@ -2428,7 +2428,7 @@ public:
         m_footerLine->setStyleSheet(u8("background:black;border:none;")); lay->addWidget(m_footerLine);
         m_nav = new QWidget(this);
         QHBoxLayout *footer = new QHBoxLayout(m_nav);
-        footer->setContentsMargins(0, 0, 0, 0); footer->setSpacing(qMax(6, qRound(GAP * 2.25)));
+        footer->setContentsMargins(GAP, 0, 0, 0); footer->setSpacing(qMax(6, qRound(GAP * 2.25)));
         m_prev = new ChromeButton(I_CHEV_UP, QString(), m_nav);
         m_next = new ChromeButton(I_CHEV_DOWN, QString(), m_nav);
         m_prev->setAccessibleName(u8("Предыдущая страница"));
@@ -2563,6 +2563,8 @@ protected:
                 }
             }
             if (pts.size() >= 2) {
+                m_swipeList = !m_menuTouch && !m_settings->isVisible() && !m_confirm->isVisible()
+                    && !m_actions->isVisible() && inList(p);
                 m_twoFinger = true;
                 m_twoStartY = (mapFromGlobal(pts.at(0).screenPos().toPoint()).y()
                                + mapFromGlobal(pts.at(1).screenPos().toPoint()).y()) / 2.0;
@@ -2663,12 +2665,12 @@ protected:
             m_holdTimer.stop(); m_holdPath.clear();
             if (m_twoFinger && m_swipeList) {
                 const int direction = pageSwipeDirection(0, int(m_twoCurrentY - m_twoStartY), SWIPE_PX);
-                if (direction) turnPage(direction);
+                if (direction) turnPage(direction, true);
             }
             if (!pts.isEmpty() && !m_twoFinger && m_moved && !m_holdFired && m_swipeList) {
                 const QPoint delta = p - m_pressPos;
                 const int direction = pageSwipeDirection(delta.x(), delta.y(), SWIPE_PX);
-                if (direction) turnPage(direction);
+                if (direction) turnPage(direction, true);
             } else if (!pts.isEmpty() && !m_twoFinger && !m_moved && !m_holdFired && !m_buttonTouchCancelled) tapAt(p, false);
             m_twoFinger = false;
             break;
@@ -3027,7 +3029,7 @@ private:
     void toClipboard(bool cut) {
         QStringList list;
         for (const QString &p : m_marked) {
-            if (!safeLocalPath(m_root, p) || (cut ? isProtected(p) : readOnlyLocalEntry(m_root, m_trash, p, ALLOW_ADDS))) continue;
+            if (!safeLocalPath(m_root, p) || readOnlyLocalEntry(m_root, m_trash, p, ALLOW_ADDS)) continue;
             list << p;
         }
         const bool skipped = list.size() < m_marked.size();
@@ -3058,7 +3060,7 @@ private:
         int done = 0;
         for (const QString &src : m_clip) {
             const QFileInfo fi(src);
-            if (!safeLocalPath(m_root, src) || (m_clipCut ? isProtected(src) : readOnlyLocalEntry(m_root, m_trash, src, ALLOW_ADDS))) {
+            if (!safeLocalPath(m_root, src) || readOnlyLocalEntry(m_root, m_trash, src, ALLOW_ADDS)) {
                 err = u8("Недоступный или защищённый путь: ") + fi.fileName();
                 remaining << src; continue;
             }
@@ -3374,9 +3376,13 @@ private:
         m_list->doItemsLayout(); m_list->scrollToTop();
         updatePageInfo();
     }
-    void turnPage(int direction) {
-        if (m_pageStarts.size() < 2) return;
-        const int next = qBound(0, m_pageIndex + direction, int(m_pageStarts.size()) - 2);
+    void turnPage(int direction, bool wrap = false) {
+        if (m_pageStarts.size() < 2 || !direction) return;
+        const int last = int(m_pageStarts.size()) - 2;
+        int next = m_pageIndex + direction;
+        if (wrap && next < 0) next = last;
+        else if (wrap && next > last) next = 0;
+        else next = qBound(0, next, last);
         if (next != m_pageIndex) { m_pageIndex = next; applyPage(); }
     }
     void updatePageInfo() {

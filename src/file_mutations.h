@@ -34,7 +34,7 @@ inline bool mayDeleteLocalEntry(const QString &root, const QString &trash, const
 }
 
 // Moves may target the normal user area, or the trash root for a trash action.
-// The explicit trash exception never permits moving a protected source.
+// Trash contents may be moved out, but never the trash root or other protected entries.
 inline bool moveLocalEntry(const QString &root, const QString &source, const QString &dest,
                            QString &error, bool toTrash = false, bool allowAdds = false) {
     const QString base = QDir::cleanPath(QFileInfo(root).absoluteFilePath());
@@ -43,7 +43,7 @@ inline bool moveLocalEntry(const QString &root, const QString &source, const QSt
     const QString parent = QFileInfo(dst).absolutePath();
     const QString trash = base + QLatin1String("/.kobrowse_trash");
     const bool trashTarget = toTrash && parent == trash;
-    if (!safeLocalPath(base, src) || protectedLocalPath(base, src, allowAdds)
+    if (!safeLocalPath(base, src) || readOnlyLocalEntry(base, trash, src, allowAdds)
         || !safeLocalPath(base, parent) || !QFileInfo(parent).isDir()
         || (!writableLocalDirectory(base, parent, allowAdds) && !trashTarget)
         || (!trashTarget && protectedLocalPath(base, dst, allowAdds))

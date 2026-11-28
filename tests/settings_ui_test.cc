@@ -122,6 +122,8 @@ class SettingsUiTest {
         require(fm.width(longLeaf) <= fm.width("short") && !longLeaf.contains('\n') && longLeaf.endsWith('/'), "long leaf fits one line and retains slash");
         require(displayBrowserPath("/mnt/onboard", "/mnt/onboard/leaf", font, fm.width("/")) == "/", "tiny width retains slash when possible");
         require(!w.m_pathLabel->wordWrap(), "address is single line");
+        require(font.pixelSize() == qMax(12, qRound(FONT_MSG * 1.4) - ptToPx(1) - ptToPx(0.5))
+                && w.m_pathLabel->styleSheet().contains("padding:5px 6px"), "address font and vertical padding reduced");
         if (!defaultListFont().isEmpty()) require(font.family() == defaultListFont(), "address uses Avenir when available");
         QImage address(w.m_pathLabel->size(), QImage::Format_RGB32); address.fill(Qt::white); w.m_pathLabel->render(&address);
         require(QColor(address.pixel(0, address.height() / 2)) == QColor(Qt::black)
@@ -135,6 +137,7 @@ class SettingsUiTest {
         require(w.m_countLabel->height() >= QFontMetrics(w.m_countLabel->font()).lineSpacing() * 2,
                 "footer counters have room for both lines");
         require(w.m_prev->geometry().center().y() == w.m_next->geometry().center().y(), "page controls aligned");
+        require(w.m_nav->layout()->contentsMargins().left() == GAP, "page counter has an extra outer gap");
         require(w.m_pageLabel->geometry().right() < w.m_prev->geometry().left()
                 && w.m_prev->geometry().right() < w.m_next->geometry().left(), "page counter precedes navigation buttons");
         const int pageX = w.m_pageLabel->x(), pageWidth = w.m_pageLabel->width();
@@ -160,6 +163,35 @@ class SettingsUiTest {
         }
         QTouchEvent event(type, &device, Qt::NoModifier, state, points);
         w.handleTouch(&event);
+    }
+    static void testSwipeWrap(KobrowseWindow &w) {
+        const QString folder = w.m_root + "/pages-fixture";
+        require(QDir().mkpath(folder), "page fixture folder");
+        for (int i = 0; i < 50; ++i) {
+            QFile file(folder + "/file-" + QString::number(i));
+            require(file.open(QIODevice::WriteOnly), "page fixture file"); file.close();
+        }
+        const QString originalPath = w.m_path;
+        w.m_path = folder; w.load(); QApplication::processEvents();
+        const int last = int(w.m_pageStarts.size()) - 2;
+        require(last > 0 && w.m_pageIndex == 0 && !w.m_prev->isEnabled(), "fixture has multiple pages");
+        w.turnPage(-1); require(w.m_pageIndex == 0, "previous button does not wrap");
+        const QPoint start = w.m_list->viewport()->mapTo(&w, w.m_list->viewport()->rect().center());
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start + QPoint(0, 100));
+        touch(w, QEvent::TouchEnd, start + QPoint(0, 100));
+        require(w.m_pageIndex == last && !w.m_next->isEnabled(), "downward swipe wraps first to last");
+        w.turnPage(1); require(w.m_pageIndex == last, "next button does not wrap");
+        touch(w, QEvent::TouchBegin, start);
+        touch(w, QEvent::TouchUpdate, start - QPoint(0, 100));
+        touch(w, QEvent::TouchEnd, start - QPoint(0, 100));
+        require(w.m_pageIndex == 0, "upward swipe wraps last to first");
+        touch(w, QEvent::TouchBegin, start, 2);
+        touch(w, QEvent::TouchUpdate, start + QPoint(0, 100), 2);
+        touch(w, QEvent::TouchEnd, start + QPoint(0, 100), 2);
+        require(w.m_pageIndex == last, "two-finger swipe wraps");
+        w.m_path = originalPath; w.load(); QApplication::processEvents();
+        require(removeTreeNoFollow(w.m_root, folder), "remove isolated page fixtures");
     }
     static void testTouchFeedback(KobrowseWindow &w) {
         QPushButton *button = w.m_countLabel;
@@ -505,10 +537,28 @@ public:
         w.m_path = w.m_root;
         w.m_clip.clear(); w.clearSelection();
         testSelection(w);
+        testSwipeWrap(w);
         testBrightness(w);
         testExtractAndLogging(w);
         w.openTrash(); QApplication::processEvents();
         require(w.m_emptyTrashButton->isVisible(), "empty trash button appears in trash");
+        const QString cutFixture = w.m_trash + "/cut-fixture.txt";
+        QFile cutFile(cutFixture); require(cutFile.open(QIODevice::WriteOnly), "trash cut fixture");
+        cutFile.write("keep"); cutFile.close();
+        w.m_marked.insert(cutFixture); w.m_selectionOrder << cutFixture; w.toClipboard(true);
+        require(w.m_clipCut && w.m_clip == (QStringList() << cutFixture), "cut from trash populates clipboard");
+        w.m_trashButton->click(); QApplication::processEvents();
+        w.m_menuRequested = true; w.updateActions();
+        bool canPaste = false;
+        for (int i = 0; i < w.m_actions->topLevelItemCount(); ++i)
+            if (w.m_actions->topLevelItem(i)->data(0, Qt::UserRole).toInt() == KobrowseWindow::ActPaste) canPaste = true;
+        require(canPaste, "paste offered after cut from trash");
+        w.pasteWork();
+        QFile restored(w.m_root + "/cut-fixture.txt");
+        require(restored.open(QIODevice::ReadOnly) && restored.readAll() == "keep" && !QFileInfo(cutFixture).exists()
+                && w.m_clip.isEmpty(), "cut and paste moves trash file with contents");
+        restored.close(); require(QFile::remove(restored.fileName()), "remove isolated restored fixture");
+        w.openTrash(); QApplication::processEvents();
         const QString trashFixture = w.m_trash + "/only-fixture";
         QFile trashFile(trashFixture); require(trashFile.open(QIODevice::WriteOnly), "trash fixture"); trashFile.close();
         w.m_emptyTrashButton->click(); require(w.m_confirm->isVisible(), "empty trash asks for confirmation");
