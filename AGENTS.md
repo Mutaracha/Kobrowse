@@ -17,12 +17,11 @@ the same change.
   repository. Use `git submodule update --init --recursive`; do not edit the
   dependency for project changes or update its revision without justification
   and verification.
-- The existing build uses NickelTC (GCC 4.9, Qt 5.2.1, C++11). Do not use APIs
-  or language features absent from that environment without a confirmed SDK
-  change and compatibility verification. Do not build Qt or repair its SDK
-  inside the application. An isolated experimental build uses Kobalt's prepared
-  kobuild Qt 5/GCC 11 SDK alongside the unchanged NickelTC build. Do not rely
-  on C++17 or change the primary toolchain until device compatibility is verified.
+- The primary build uses the pinned kobuild Qt 5/GCC 11 SDK with the existing
+  Qt 5 NickelTC sysroot; it does not update the device's Qt. Keep Qt 5 API
+  compatibility and C++11 unless a deliberate change is justified. Do not build
+  Qt or repair its SDK inside the application. Private Nickel APIs remain
+  firmware-sensitive even when compilation succeeds.
 - Do not assume Docker, a container socket, Qt, or a real device exists in the
   Arena environment. Network and tools vary; report what was actually tested.
 
@@ -42,19 +41,15 @@ the same change.
   ability to mount a temporary loop image. The script only uses its own isolated
   image, never devices.
 - For local cross-compilation when Docker and the SDK are available, run
-  `bash scripts/build-kobo.sh`. Initialize the submodule first. The script
-  removes only previous generated outputs, runs `make -B all` and `make package`
-  in the NickelTC image pinned by digest in the script, checks archive contents
-  and the packaged library against the build output, and creates
-  `build/build-info.json` with Git state, SDK and SHA-256. CI requires clean
-  sources and saves metadata alongside the package. Running `make package`
-  alone does not provide these checks. Do not build Qt. `CONTAINER_ENGINE` and
-  `KOBROWSE_SDK_IMAGE` are for deliberate alternative-environment testing.
-- `bash scripts/build-kobuild.sh` makes an isolated experimental Qt 5 build
-  using the pinned kobuild image in `build/kobuild/`, leaving the standard
-  outputs untouched. It validates its own package and metadata. CI compares
-  both ELF files with `scripts/compare-kobo-abi.py` and stores separate artifacts;
-  static checks cannot establish private-API or device compatibility.
+  `bash scripts/build-kobo.sh` after initializing the submodule. It uses the
+  pinned kobuild Qt 5 image, builds in an isolated temporary copy, verifies the
+  archive and records provenance and hashes in `build/build-info.json`. CI
+  builds this SDK only. `CONTAINER_ENGINE` and `KOBROWSE_SDK_IMAGE` permit
+  deliberate alternative-environment testing. Never run `make package` alone
+  and present it as a verified build. Do not build Qt.
+- Run `bash tests/run-native-keyboard-tests.sh` with Qt 5 for mock Nickel
+  keyboard lifecycle and failure cases. Mock tests and ELF inspection cannot
+  establish ABI or device compatibility.
 - `libkobrowse.so` is generated; do not keep it in the repository. Never present
   an old binary as a new build. Do not blindly run `make clean`: NickelHook's
   standard rules can delete `KoboRoot.tgz` in the working directory.
@@ -66,8 +61,7 @@ the same change.
   was actually checked.
 - `.github/workflows/kobo-test.yml` fetches the submodule, runs tests, builds and
   verifies the package, and stores it with metadata in the
-  `kobrowse-kobo-qt5-test` artifact, plus `kobrowse-kobuild-qt5-experimental`
-  with its ABI report. The user does not need Docker or NickelTC
+  `kobrowse-kobo-qt5-test` artifact. The user does not need Docker or the SDK
   on their computer; the GitHub runner uses Docker. Do not promise a successful
   build before verifying the specific run. The artifact is a test build, not a
   published release.

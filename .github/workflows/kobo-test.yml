@@ -46,6 +46,14 @@ jobs:
             exit 1
           fi
           cat build/settings-test.log
+      - name: Test native keyboard adapter (offscreen, mock Nickel)
+        run: |
+          if ! bash tests/run-native-keyboard-tests.sh > build/keyboard-test.log 2>&1; then
+            cat build/keyboard-test.log
+            grep -E '(^FAIL:|error:|undefined reference|collect2:)' build/keyboard-test.log | head -n 12 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
+          cat build/keyboard-test.log
       - name: Test brightness gesture and mock native backend (offscreen)
         run: bash tests/run-brightness-tests.sh
       - name: Test ZIP creation and isolated validation
@@ -64,7 +72,7 @@ jobs:
             exit 1
           fi
           cat build/package-test.log
-      - name: Build and verify Qt 5 test package
+      - name: Build and verify kobuild Qt 5 test package
         env:
           KOBROWSE_REQUIRE_CLEAN: '1'
         run: |
@@ -80,30 +88,4 @@ jobs:
           path: |
             build/KoboRoot.tgz
             build/build-info.json
-          if-no-files-found: error
-      - name: Build experimental kobuild Qt 5 package
-        env:
-          KOBROWSE_REQUIRE_CLEAN: '1'
-        run: |
-          if ! bash scripts/build-kobuild.sh > build/kobuild-cross.log 2>&1; then
-            cat build/kobuild-cross.log
-            grep -E '(error:|undefined reference|Error [0-9]|fatal error:|Package check failed:|Build metadata failed:)' build/kobuild-cross.log | head -n 12 | while IFS= read -r line; do echo "::error::$line"; done
-            exit 1
-          fi
-          cat build/kobuild-cross.log
-      - name: Compare ELF dependencies and ABI with NickelTC
-        run: |
-          if ! python3 scripts/compare-kobo-abi.py libkobrowse.so build/kobuild/libkobrowse.so > build/kobuild/abi-report.txt 2>&1; then
-            cat build/kobuild/abi-report.txt
-            tail -n 4 build/kobuild/abi-report.txt | while IFS= read -r line; do echo "::error::$line"; done
-            exit 1
-          fi
-          cat build/kobuild/abi-report.txt
-      - uses: actions/upload-artifact@v7
-        with:
-          name: kobrowse-kobuild-qt5-experimental
-          path: |
-            build/kobuild/KoboRoot.tgz
-            build/kobuild/build-info.json
-            build/kobuild/abi-report.txt
           if-no-files-found: error

@@ -465,7 +465,10 @@ public:
         require(!input->m_inputPending && !input->m_systemInput && input->m_kbBox->isVisible()
                 && input->m_field->text() == QString::fromUtf8("Тест") && input->cursorPos() == 2,
                 "input method fallback preserves text, cursor and built-in keyboard");
-        input->submitInput(); require(submits == 1 && input->isVisible(), "failed submit occurs once and keeps editor open");
+        input->submitInput(); input->submitInput();
+        require(submits == 1 && input->isVisible(), "duplicate submit in one event is suppressed");
+        QApplication::processEvents(); input->submitInput();
+        require(submits == 2 && input->isVisible(), "subsequent submit is allowed");
         delete input;
         testFolderIcons(w); testRowSeparators(w); testNames(w); testPathLabel(w); testFooter(w); testTouchFeedback(w);
         require(w.m_sortButtons.size() == 3 && w.m_sortButtons[0]->text().contains(QString::fromUtf8("↑")), "default sort header");

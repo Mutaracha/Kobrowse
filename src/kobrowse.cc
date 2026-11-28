@@ -77,6 +77,7 @@
 #include "device_status.h"
 #include "setting_slider.h"
 #include "brightness.h"
+#include "native_keyboard.h"
 #include <dirent.h>
 #include <cerrno>
 
@@ -1537,6 +1538,15 @@ public:
         lay->addWidget(m_kbBox);
         m_nativeSpace = new QWidget(this); m_nativeSpace->setFixedHeight(0); m_nativeSpace->hide();
         lay->addWidget(m_nativeSpace);
+        m_nativeKeyboard = new NativeKeyboard(this, m_nativeField);
+        m_nativeKeyboard->submitted = [this]() { submitInput(); };
+        m_nativeKeyboard->heightChanged = [this](int h) {
+            if (!m_nativeActive) return;
+            if (h <= 0) { m_nativeActive = false; useFallbackInput(); return; }
+            m_nativeSpace->setFixedHeight(qMin(h, height())); m_nativeSpace->show();
+        };
+        m_submitTimer.setSingleShot(true);
+        connect(&m_submitTimer, &QTimer::timeout, [this]() { m_submitting = false; });
         m_inputTimer.setSingleShot(true); m_inputTimer.setInterval(800);
         connect(&m_inputTimer, &QTimer::timeout, [this]() { finishInputProbe(); });
         if (QGuiApplication::inputMethod())
@@ -1562,13 +1572,15 @@ protected:
     void hideEvent(QHideEvent *e) override {
         m_inputTimer.stop();
         if ((m_inputPending || m_systemInput) && QGuiApplication::inputMethod()) QGuiApplication::inputMethod()->hide();
-        m_inputPending = false; m_systemInput = false;
+        if (m_nativeKeyboard) m_nativeKeyboard->hideKeyboard();
+        m_nativeActive = false; m_inputPending = false; m_systemInput = false;
         QWidget::hideEvent(e);
     }
     void resizeEvent(QResizeEvent *e) override {
         QWidget::resizeEvent(e);
         const int w = qMax(240, this->width() - 24);
         if (m_kbBox && w != m_lastKbWidth) buildKeyboard();
+        if (m_nativeActive && m_nativeKeyboard) m_nativeKeyboard->place();
     }
     bool event(QEvent *e) override { if (handleTouch(e)) return true; return QWidget::event(e); }
     bool eventFilter(QObject *obj, QEvent *e) override {
@@ -1576,7 +1588,8 @@ protected:
         if (!(t == QEvent::TouchBegin || t == QEvent::TouchUpdate || t == QEvent::TouchEnd
               || t == QEvent::TouchCancel) || obj == this || !obj->isWidgetType()) return false;
         QWidget *w = static_cast<QWidget *>(obj);
-        if ((m_inputPending || m_systemInput) && (w == m_nativeField || m_nativeField->isAncestorOf(w))) return false;
+        if ((m_inputPending || m_systemInput || m_nativeActive) && (w == m_nativeField || m_nativeField->isAncestorOf(w))) return false;
+        if (m_nativeActive && m_nativeKeyboard->owns(w)) return false;
         if (isAncestorOf(w)) return handleTouch(e);
         if (w == window() || w->isAncestorOf(this)) {
             const QList<QTouchEvent::TouchPoint> pts = static_cast<QTouchEvent *>(e)->touchPoints();
@@ -1588,7 +1601,16 @@ protected:
 
 private:
     void beginInputProbe() {
-        if (!QGuiApplication::inputMethod() || m_inputPending || m_systemInput) return;
+        if (m_inputPending || m_systemInput || m_nativeActive) return;
+        m_nativeField->setText(m_field->text()); m_nativeField->setCursorPosition(m_cur);
+        m_nativeActive = true;
+        if (m_nativeKeyboard && m_nativeKeyboard->showKeyboard()) {
+            m_field->hide(); m_nativeField->show(); m_kbBox->hide();
+            m_nativeKeyboard->place(); m_nativeField->setFocus(Qt::OtherFocusReason);
+            return;
+        }
+        m_nativeActive = false;
+        if (!QGuiApplication::inputMethod()) return;
         m_inputPending = true;
         m_nativeField->setText(m_field->text()); m_nativeField->setCursorPosition(m_cur);
         m_field->hide(); m_nativeField->show(); m_nativeField->setFocus(Qt::OtherFocusReason);
@@ -1617,6 +1639,8 @@ private:
         m_nativeField->hide(); m_nativeSpace->hide(); m_field->show(); m_kbBox->show();
     }
     void submitInput() {
+        if (m_submitting) return;
+        m_submitting = true; m_submitTimer.start(0);
         releaseCombine();
         if (m_rename) { const QString error = m_rename(m_field->text()); if (error.isEmpty()) close(); else showMsg(error); }
         else doSearch();
@@ -1978,6 +2002,9 @@ private:
     QueryField *m_field;
     QLineEdit *m_nativeField = nullptr;
     QWidget *m_nativeSpace = nullptr;
+    NativeKeyboard *m_nativeKeyboard = nullptr;
+    bool m_nativeActive = false, m_submitting = false;
+    QTimer m_submitTimer;
     QTimer m_inputTimer;
     bool m_inputPending = false, m_systemInput = false;
     QTreeWidget *m_list;

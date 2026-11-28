@@ -2,7 +2,8 @@
 include NickelHook/NickelHook.mk
 
 override LIBRARY  := libkobrowse.so
-override SOURCES  += src/kobrowse.cc src/zip_writer.cc src/zip_validator.cc src/zip_extract.cc
+override SOURCES  += src/kobrowse.cc src/zip_writer.cc src/zip_validator.cc src/zip_extract.cc src/native_keyboard.cc
+override MOCS     += src/native_keyboard.h
 override PKGCONF  += Qt5Widgets
 override LDFLAGS  += -lz
 KOBROWSE_BUILD_NUMBER ?= local
